@@ -116,8 +116,12 @@ function isSimilar(s1: string, s2: string) {
 }
 
 export default function App() {
-  const [scheduleDataStr, setScheduleDataStr] = useState('');
+  // Caja 1: Breaks/Lunch
+  const [breaksDataStr, setBreaksDataStr] = useState('');
+  // Caja 2: Headcount/detalle
   const [rosterDataStr, setRosterDataStr] = useState('');
+  // Caja 3: Horarios semanales
+  const [scheduleDataStr, setScheduleDataStr] = useState('');
   const [weekStartDate, setWeekStartDate] = useState('');
   const [campaignName, setCampaignName] = useState('Gen Mobile');
   const [defaultWorkType, setDefaultWorkType] = useState('WFH');
@@ -126,36 +130,33 @@ export default function App() {
 
   const handleGenerate = () => {
     try {
-      if (!scheduleDataStr || !rosterDataStr || !weekStartDate) {
-        alert('Please provide Schedule Data, Roster Data, and a Week Start Date.');
+      if (!breaksDataStr || !rosterDataStr || !scheduleDataStr || !weekStartDate) {
+        alert('Por favor pega los datos en las tres cajas y selecciona la fecha de inicio de semana.');
         return;
       }
 
-      const scheduleData = parseTSV(scheduleDataStr.trim());
+      // Parse all three sources
+      const breaksData = parseTSV(breaksDataStr.trim());
       const rosterData = parseTSV(rosterDataStr.trim());
+      const scheduleData = parseTSV(scheduleDataStr.trim());
 
-      if (scheduleData.length === 0 || rosterData.length === 0) {
-        alert('Data is empty.');
+      if (breaksData.length === 0 || rosterData.length === 0 || scheduleData.length === 0) {
+        alert('Alguno de los datos está vacío.');
         return;
       }
 
-      // --- ROSTER PARSING ---
+      // --- HEADCOUNT/PERSONAS ---
       let rHeaderIdx = rosterData.findIndex(row => row.some(cell => cell.toUpperCase().includes('EMP ID') || cell.toUpperCase().includes('FULL NAME')));
       if (rHeaderIdx === -1) rHeaderIdx = 0;
       const rHeaders = rosterData[rHeaderIdx] || [];
-      
       let rEmpIdIdx = rHeaders.findIndex(h => h.toUpperCase().includes('EMP ID'));
       if (rEmpIdIdx === -1) rEmpIdIdx = 0;
-      
       let rFullNameIdx = rHeaders.findIndex(h => h.toUpperCase().includes('FULL NAME'));
       if (rFullNameIdx === -1) rFullNameIdx = 1;
-      
       let rShortNameIdx = rHeaders.findIndex(h => h.toUpperCase().includes('SHORT NAME'));
       if (rShortNameIdx === -1) rShortNameIdx = 2;
-      
       let rSupervisorIdx = rHeaders.findIndex(h => h.toUpperCase().includes('SUPERVISOR'));
       if (rSupervisorIdx === -1) rSupervisorIdx = 8;
-
       const rosterList: any[] = [];
       for (let i = 0; i < rosterData.length; i++) {
         if (i === rHeaderIdx) continue;
@@ -173,11 +174,159 @@ export default function App() {
         }
       }
 
-      // --- SCHEDULE PARSING ---
-      let sHeaderIdx = scheduleData.findIndex(row => row.some(cell => cell.toUpperCase().replace(/\s+/g, '').includes('ID-NAME') || cell.toUpperCase().replace(/\s+/g, '').includes('SHIFTSTART')));
-      
-      let idNameIdx = -1;
-      let idIdx = -1;
+      // --- HORARIOS SEMANALES ---
+      // Detectar encabezados de días y columnas de horarios
+      let schedHeaderIdx = scheduleData.findIndex(row => row.some(cell => cell.toUpperCase().includes('NAME')));
+      if (schedHeaderIdx === -1) schedHeaderIdx = 0;
+      const schedHeaders = scheduleData[schedHeaderIdx] || [];
+      // Buscar columnas de entrada/salida por día
+      const dayCols: { [key: string]: { inIdx: number, outIdx: number } } = {};
+      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      days.forEach((d, i) => {
+        const inIdx = schedHeaders.findIndex(h => h.toUpperCase().includes(d.toUpperCase() + ' IN'));
+        const outIdx = schedHeaders.findIndex(h => h.toUpperCase().includes(d.toUpperCase() + ' OUT'));
+        dayCols[d] = { inIdx, outIdx };
+      });
+      // Nombre
+      const schedNameIdx = schedHeaders.findIndex(h => h.toUpperCase().includes('NAME'));
+
+      // --- BREAKS/LUNCH ---
+      // Buscar columnas de breaks/lunch por día
+      const breaksHeaders = breaksData[0] || [];
+      const breakCols: { [key: string]: { b1in: number, b1out: number, lunchin: number, lunchout: number, b2in: number, b2out: number } } = {};
+      days.forEach((d, i) => {
+        breakCols[d] = {
+          b1in: breaksHeaders.findIndex(h => h.toUpperCase().includes('BREAK1') && h.toUpperCase().includes(d.toUpperCase()) && h.toUpperCase().includes('START')),
+          b1out: breaksHeaders.findIndex(h => h.toUpperCase().includes('BREAK1') && h.toUpperCase().includes(d.toUpperCase()) && h.toUpperCase().includes('END')),
+          lunchin: breaksHeaders.findIndex(h => h.toUpperCase().includes('LUNCH') && h.toUpperCase().includes(d.toUpperCase()) && h.toUpperCase().includes('START')),
+          lunchout: breaksHeaders.findIndex(h => h.toUpperCase().includes('LUNCH') && h.toUpperCase().includes(d.toUpperCase()) && h.toUpperCase().includes('END')),
+          b2in: breaksHeaders.findIndex(h => h.toUpperCase().includes('BREAK2') && h.toUpperCase().includes(d.toUpperCase()) && h.toUpperCase().includes('START')),
+          b2out: breaksHeaders.findIndex(h => h.toUpperCase().includes('BREAK2') && h.toUpperCase().includes(d.toUpperCase()) && h.toUpperCase().includes('END')),
+        };
+      });
+
+      // Mapear breaks/lunch por nombre normalizado
+      const breaksMap: Record<string, any> = {};
+      for (let i = 1; i < breaksData.length; i++) {
+        const row = breaksData[i];
+        const name = normalizeName(row[0]);
+        breaksMap[name] = row;
+      }
+
+      // --- UNIFICAR DATOS ---
+      const outputRows: any[] = [];
+      for (let i = schedHeaderIdx + 1; i < scheduleData.length; i++) {
+        const schedRow = scheduleData[i];
+        const schedName = schedRow[schedNameIdx]?.trim();
+        if (!schedName) continue;
+        const normName = normalizeName(schedName);
+        // Buscar en headcount
+        let rosterInfo = rosterList.find(r => r.normName === normName);
+        if (!rosterInfo) {
+          // Fallback: buscar por similaridad
+          rosterInfo = rosterList.find(r => isSimilar(r.normName, normName));
+        }
+        // Buscar breaks/lunch
+        let breaksRow = breaksMap[normName];
+        // Si no hay breaks, buscar a alguien con el mismo horario
+        let horarioClave = '';
+        let horarioObj: any = {};
+        days.forEach(d => {
+          horarioObj[d] = {
+            in: schedRow[dayCols[d].inIdx]?.trim().toUpperCase(),
+            out: schedRow[dayCols[d].outIdx]?.trim().toUpperCase(),
+          };
+          horarioClave += `${horarioObj[d].in}-${horarioObj[d].out}|`;
+        });
+        if (!breaksRow && horarioClave) {
+          // Buscar otro agente con el mismo horario
+          for (const [otherName, otherRow] of Object.entries(breaksMap)) {
+            let match = true;
+            days.forEach(d => {
+              const idxIn = dayCols[d].inIdx;
+              const idxOut = dayCols[d].outIdx;
+              if (
+                (schedRow[idxIn]?.trim().toUpperCase() !== scheduleData[schedHeaderIdx + 1][idxIn]?.trim().toUpperCase()) ||
+                (schedRow[idxOut]?.trim().toUpperCase() !== scheduleData[schedHeaderIdx + 1][idxOut]?.trim().toUpperCase())
+              ) {
+                match = false;
+              }
+            });
+            if (match) {
+              breaksRow = otherRow;
+              break;
+            }
+          }
+        }
+        // Si sigue sin haber breaks, poner genérico
+        function genericBreak(horario: { in: string, out: string }) {
+          if (horario.in === 'OFF' || horario.in === 'MAT' || horario.in === 'VACATION' || !horario.in) return { b1in: '', b1out: '', lunchin: '', lunchout: '', b2in: '', b2out: '' };
+          // Ejemplo: break 2h después de entrada, lunch 4h después, break2 2h antes de salida
+          const [hIn, mIn] = horario.in.split(':').map(Number);
+          const [hOut, mOut] = horario.out.split(':').map(Number);
+          const minsIn = hIn * 60 + (mIn || 0);
+          const minsOut = hOut * 60 + (mOut || 0);
+          const dur = minsOut - minsIn;
+          if (isNaN(dur) || dur < 300) return { b1in: '', b1out: '', lunchin: '', lunchout: '', b2in: '', b2out: '' };
+          return {
+            b1in: `${String(hIn + 2).padStart(2, '0')}:00`,
+            b1out: `${String(hIn + 2).padStart(2, '0')}:15`,
+            lunchin: `${String(hIn + 4).padStart(2, '0')}:00`,
+            lunchout: `${String(hIn + 4).padStart(2, '0')}:30`,
+            b2in: `${String(hOut - 2).padStart(2, '0')}:00`,
+            b2out: `${String(hOut - 2).padStart(2, '0')}:15`,
+          };
+        }
+        // Por cada día
+        for (let d = 0; d < days.length; d++) {
+          const day = days[d];
+          const horario = horarioObj[day];
+          let status = horario.in;
+          if (["OFF", "MAT", "MATERNITY LEAVE", "VACATION", "ABSENT", "REST", "REST DAY", "MATERNIDAD", "VAC"].includes(status)) {
+            status = status === "MATERNITY LEAVE" ? "MAT" : status;
+          }
+          // Fecha
+          const [y, m, dd] = weekStartDate.split('-');
+          const dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(dd));
+          dateObj.setDate(dateObj.getDate() + d);
+          // Breaks/lunch
+          let breaks = { b1in: '', b1out: '', lunchin: '', lunchout: '', b2in: '', b2out: '' };
+          if (breaksRow) {
+            breaks = {
+              b1in: breaksRow[breakCols[day].b1in] || '',
+              b1out: breaksRow[breakCols[day].b1out] || '',
+              lunchin: breaksRow[breakCols[day].lunchin] || '',
+              lunchout: breaksRow[breakCols[day].lunchout] || '',
+              b2in: breaksRow[breakCols[day].b2in] || '',
+              b2out: breaksRow[breakCols[day].b2out] || '',
+            };
+          } else {
+            breaks = genericBreak(horario);
+          }
+          outputRows.push({
+            Name: schedName,
+            EmpId: rosterInfo?.empId || '',
+            Date: formatDate(dateObj),
+            Day: day,
+            In: horario.in,
+            Out: horario.out,
+            Status: status,
+            Break1In: breaks.b1in,
+            Break1Out: breaks.b1out,
+            LunchIn: breaks.lunchin,
+            LunchOut: breaks.lunchout,
+            Break2In: breaks.b2in,
+            Break2Out: breaks.b2out,
+          });
+        }
+      }
+      setOutputData(outputRows);
+      alert(`¡Generado! ${outputRows.length} filas.`);
+    } catch (error: any) {
+      console.error(error);
+      alert(`Ocurrió un error: ${error.message}`);
+    }
+  };
       let shiftStartIndices: number[] = [];
       let shiftEndIndices: number[] = [];
       let b1StartIndices: number[] = [];
@@ -492,30 +641,42 @@ export default function App() {
           <h1 className="text-2xl font-semibold text-slate-800">Schedule Transformer</h1>
         </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col">
             <label className="flex items-center space-x-2 text-sm font-medium text-slate-700 mb-2">
               <FileSpreadsheet size={18} className="text-indigo-500" />
-              <span>Paste Schedule Data (Image 1)</span>
+              <span>Caja 1: Breaks y Lunch (formato detallado)</span>
             </label>
             <textarea 
               className="flex-1 min-h-[200px] p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y font-mono whitespace-pre"
-              placeholder="Paste TSV data here (copy directly from Excel)..."
-              value={scheduleDataStr}
-              onChange={e => setScheduleDataStr(e.target.value)}
+              placeholder="Pega aquí los breaks y lunch (formato detallado, imagen 1)..."
+              value={breaksDataStr}
+              onChange={e => setBreaksDataStr(e.target.value)}
             />
           </div>
-
           <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col">
             <label className="flex items-center space-x-2 text-sm font-medium text-slate-700 mb-2">
               <Users size={18} className="text-emerald-500" />
-              <span>Paste Timeline/Roster Data (Image 3)</span>
+              <span>Caja 2: Headcount/Detalle</span>
             </label>
             <textarea 
               className="flex-1 min-h-[200px] p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none resize-y font-mono whitespace-pre"
-              placeholder="Paste TSV data here (copy directly from Excel)..."
+              placeholder="Pega aquí el headcount/detalle..."
               value={rosterDataStr}
               onChange={e => setRosterDataStr(e.target.value)}
+            />
+          </div>
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col">
+            <label className="flex items-center space-x-2 text-sm font-medium text-slate-700 mb-2">
+              <FileSpreadsheet size={18} className="text-indigo-500" />
+              <span>Caja 3: Horarios Semanales</span>
+            </label>
+            <textarea 
+              className="flex-1 min-h-[200px] p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y font-mono whitespace-pre"
+              placeholder="Pega aquí los horarios semanales (formato tabla semanal)..."
+              value={scheduleDataStr}
+              onChange={e => setScheduleDataStr(e.target.value)}
             />
           </div>
         </div>
