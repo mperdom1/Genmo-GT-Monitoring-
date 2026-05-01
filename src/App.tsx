@@ -1,41 +1,26 @@
 import React, { useState } from 'react';
-import { ClipboardCopy, FileSpreadsheet, ArrowRightLeft, Users, Download } from 'lucide-react';
+import { ArrowRightLeft, ClipboardCopy, Download, FileSpreadsheet } from 'lucide-react';
 
-function convertTime(timeStr: string) {
-  if (!timeStr) return '00:00';
-  const upper = timeStr.trim().toUpperCase();
-  if (upper === 'OFF') return '00:00';
-  
-  // Already in HH:MM or H:MM format
-  if (/^\d{1,2}:\d{2}$/.test(timeStr.trim())) {
-    const [h, m] = timeStr.trim().split(':');
-    return `${h.padStart(2, '0')}:${m}`;
-  }
-  
-  const match = timeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
-  if (!match) return timeStr.trim(); // Fallback
-  let hours = parseInt(match[1], 10);
-  const minutes = match[2];
-  const period = match[3].toUpperCase();
-  
-  if (period === 'PM' && hours !== 12) hours += 12;
-  if (period === 'AM' && hours === 12) hours = 0;
-  
-  return `${hours.toString().padStart(2, '0')}:${minutes}`;
-}
-
-function calculateMinutes(start: string, end: string) {
-  if (!start || !end || (start === '00:00' && end === '00:00')) return 0;
-  const [sh, sm] = start.split(':').map(Number);
-  const [eh, em] = end.split(':').map(Number);
-  
-  if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return 0;
-  
-  let startMins = sh * 60 + sm;
-  let endMins = eh * 60 + em;
-  if (endMins < startMins) endMins += 24 * 60;
-  return endMins - startMins;
-}
+type OutputRow = {
+  VisualCode: string;
+  Campaign: string;
+  Team: string;
+  EmployeeName: string;
+  Date: string;
+  SchIn: string;
+  SchOut: string;
+  PnchIn: string;
+  PnchOut: string;
+  Staffed: number;
+  Scheduled: number;
+  Paused: number;
+  Remark: string;
+  ScheduleType: string;
+  WorkType: string;
+  BreakLunchScheduledDisplay: string;
+  BreakLunchStaffedDisplay: string;
+  BreakLunchRemark: string;
+};
 
 function formatDate(dateObj: Date) {
   const m = (dateObj.getMonth() + 1).toString().padStart(2, '0');
@@ -44,16 +29,59 @@ function formatDate(dateObj: Date) {
   return `${m}-${d}-${y}`;
 }
 
-function formatDuration(minutes: number) {
-  if (!minutes) return '00:00:00';
-  const h = Math.floor(minutes / 60).toString().padStart(2, '0');
-  const m = (minutes % 60).toString().padStart(2, '0');
-  return `${h}:${m}:00`;
+function parseHeaderDateToken(token: string, fallbackYear: number) {
+  const raw = (token || '').trim();
+  if (!raw) return null;
+
+  const match = raw.match(/^(\d{1,2})[-\s\/](\p{L}{3,})$/u);
+  if (!match) return null;
+
+  const day = parseInt(match[1], 10);
+  const monthText = match[2].toLowerCase();
+  const monthMap: Record<string, number> = {
+    jan: 0,
+    enero: 0,
+    feb: 1,
+    febrero: 1,
+    mar: 2,
+    marzo: 2,
+    apr: 3,
+    abril: 3,
+    may: 4,
+    mayo: 4,
+    jun: 5,
+    junio: 5,
+    jul: 6,
+    julio: 6,
+    aug: 7,
+    ago: 7,
+    agosto: 7,
+    sep: 8,
+    sept: 8,
+    septiembre: 8,
+    oct: 9,
+    octubre: 9,
+    nov: 10,
+    noviembre: 10,
+    dec: 11,
+    dic: 11,
+    diciembre: 11,
+  };
+
+  const month = monthMap[monthText];
+  if (month === undefined) return null;
+
+  return new Date(fallbackYear, month, day);
 }
 
 function normalizeName(name: string) {
   if (!name) return '';
-  return name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim().replace(/\s+/g, ' ');
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
 }
 
 function parseTSV(tsv: string) {
@@ -92,533 +120,496 @@ function parseTSV(tsv: string) {
       currentCell += char;
     }
   }
+
   if (currentRow.length > 0 || currentCell !== '') {
     currentRow.push(currentCell);
     rows.push(currentRow);
   }
+
   return rows;
 }
 
-function isSimilar(s1: string, s2: string) {
-  if (s1 === s2) return true;
-  if (Math.abs(s1.length - s2.length) > 2) return false;
-  let common = 0;
-  let s2Copy = s2;
-  for (let i = 0; i < s1.length; i++) {
-    const char = s1[i];
-    const idx = s2Copy.indexOf(char);
-    if (idx !== -1) {
-      common++;
-      s2Copy = s2Copy.substring(0, idx) + s2Copy.substring(idx + 1);
+function parseVisualCode(attendanceIdRaw: string) {
+  const match = attendanceIdRaw.match(/\((\d+)\)/);
+  return match?.[1] ?? '';
+}
+
+function convertTime(timeStr: string) {
+  const raw = (timeStr || '').trim();
+  if (!raw) return '';
+
+  const upper = raw.toUpperCase();
+  if (upper === 'OFF' || upper === 'MAT' || upper === 'VACATION' || upper === 'VAC') {
+    return '00:00';
+  }
+
+  if (/^\d{1,2}:\d{2}$/.test(raw)) {
+    const [h, m] = raw.split(':');
+    return `${h.padStart(2, '0')}:${m}`;
+  }
+
+  const ampm = raw.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (ampm) {
+    let h = parseInt(ampm[1], 10);
+    const m = ampm[2];
+    const period = ampm[3].toUpperCase();
+    if (period === 'PM' && h !== 12) h += 12;
+    if (period === 'AM' && h === 12) h = 0;
+    return `${h.toString().padStart(2, '0')}:${m}`;
+  }
+
+  return raw;
+}
+
+function calculateMinutes(start: string, end: string) {
+  if (!start || !end || (start === '00:00' && end === '00:00')) return 0;
+
+  const [sh, sm] = start.split(':').map(Number);
+  const [eh, em] = end.split(':').map(Number);
+
+  if ([sh, sm, eh, em].some((v) => Number.isNaN(v))) return 0;
+
+  let startMins = sh * 60 + sm;
+  let endMins = eh * 60 + em;
+
+  if (endMins < startMins) endMins += 24 * 60;
+
+  return endMins - startMins;
+}
+
+function toEmployeeName(name: string) {
+  const parts = normalizeName(name).split(' ').filter(Boolean);
+  if (parts.length >= 3) return `${parts[0]}.${parts[2]}`;
+  if (parts.length >= 2) return `${parts[0]}.${parts[1]}`;
+  return parts[0] || '';
+}
+
+function tokenizeName(name: string) {
+  const stopwords = new Set(['de', 'del', 'la', 'las', 'los', 'y', 'da', 'do']);
+  return normalizeName(name)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(' ')
+    .map((t) => t.trim())
+    .filter((t) => t && !stopwords.has(t));
+}
+
+function normalizeHeader(header: string) {
+  return (header || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function firstLastKey(tokens: string[]) {
+  if (!tokens.length) return '';
+  if (tokens.length === 1) return tokens[0];
+  return `${tokens[0]} ${tokens[tokens.length - 1]}`;
+}
+
+function tokenDistance(a: string, b: string) {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > 1) return 99;
+
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i++;
+      j++;
+      continue;
+    }
+
+    edits++;
+    if (edits > 1) return edits;
+
+    if (a.length > b.length) {
+      i++;
+    } else if (b.length > a.length) {
+      j++;
+    } else {
+      i++;
+      j++;
     }
   }
-  return common / Math.max(s1.length, s2.length) >= 0.8;
+
+  if (i < a.length || j < b.length) edits++;
+  return edits;
+}
+
+function tokenMatchesLoose(a: string, b: string) {
+  if (a === b) return true;
+  if (a.length < 4 || b.length < 4) return false;
+  return tokenDistance(a, b) <= 1;
+}
+
+function countLooseOverlap(source: string[], target: string[]) {
+  let overlap = 0;
+  const used = new Set<number>();
+
+  for (const s of source) {
+    const idx = target.findIndex((t, i) => !used.has(i) && tokenMatchesLoose(s, t));
+    if (idx !== -1) {
+      used.add(idx);
+      overlap++;
+    }
+  }
+
+  return overlap;
+}
+
+const STATUS_LABELS: Record<string, { remark: string; scheduleType: string; isOff: boolean }> = {
+  PRESENT: { remark: 'Present', scheduleType: ' Regular', isOff: false },
+  ABSENT: { remark: 'Absent', scheduleType: ' Regular', isOff: true },
+  LATE: { remark: 'Late', scheduleType: ' Regular', isOff: false },
+  UNDERTIME: { remark: 'Undertime', scheduleType: ' Regular', isOff: false },
+  'LATE / UNDERTIME': { remark: 'Late / Undertime', scheduleType: ' Regular', isOff: false },
+  'LATE/UNDERTIME': { remark: 'Late / Undertime', scheduleType: ' Regular', isOff: false },
+  OFF: { remark: 'Rest Day', scheduleType: 'Rest Day', isOff: true },
+  REST: { remark: 'Rest Day', scheduleType: 'Rest Day', isOff: true },
+  'REST DAY': { remark: 'Rest Day', scheduleType: 'Rest Day', isOff: true },
+  VAC: { remark: 'Leave', scheduleType: 'Vacation Leave', isOff: true },
+  VACATION: { remark: 'Leave', scheduleType: 'Vacation Leave', isOff: true },
+  'VACATION LEAVE': { remark: 'Leave', scheduleType: 'Vacation Leave', isOff: true },
+  MAT: { remark: 'Leave', scheduleType: 'Maternity Leave', isOff: true },
+  MATERNIDAD: { remark: 'Leave', scheduleType: 'Maternity Leave', isOff: true },
+  'MATERNITY LEAVE': { remark: 'Leave', scheduleType: 'Maternity Leave', isOff: true },
+  'BIRTHDAY LEAVE': { remark: 'Leave', scheduleType: 'Birthday Leave', isOff: true },
+  SUSPENSION: { remark: 'Leave', scheduleType: 'Suspension', isOff: true },
+};
+
+function normalizeStatus(value: string) {
+  return value.toUpperCase().trim().replace(/\s+/g, ' ');
+}
+
+function getStatusLabels(statusRaw: string) {
+  const key = normalizeStatus(statusRaw);
+  return STATUS_LABELS[key];
+}
+
+function isClockTime(value: string) {
+  return /^(\d{1,2}:\d{2})(\s?(AM|PM))?$/i.test(value.trim());
 }
 
 export default function App() {
-  // Caja 1: Breaks/Lunch
-  const [breaksDataStr, setBreaksDataStr] = useState('');
-  // Caja 2: Headcount/detalle
-  const [rosterDataStr, setRosterDataStr] = useState('');
-  // Caja 3: Horarios semanales
   const [scheduleDataStr, setScheduleDataStr] = useState('');
+  const [headcountDataStr, setHeadcountDataStr] = useState('');
   const [weekStartDate, setWeekStartDate] = useState('');
   const [campaignName, setCampaignName] = useState('Gen Mobile');
   const [defaultWorkType, setDefaultWorkType] = useState('WFH');
   const [defaultTeam, setDefaultTeam] = useState('GT-Gen Mobile -01');
-  const [outputData, setOutputData] = useState<any[]>([]);
+  const [outputData, setOutputData] = useState<OutputRow[]>([]);
 
   const handleGenerate = () => {
     try {
-      if (!breaksDataStr || !rosterDataStr || !scheduleDataStr || !weekStartDate) {
-        alert('Por favor pega los datos en las tres cajas y selecciona la fecha de inicio de semana.');
+      if (!scheduleDataStr) {
+        alert('Pega los horarios en la Caja 1.');
         return;
       }
 
-      // Parse all three sources
-      const breaksData = parseTSV(breaksDataStr.trim());
-      const rosterData = parseTSV(rosterDataStr.trim());
       const scheduleData = parseTSV(scheduleDataStr.trim());
-
-      if (breaksData.length === 0 || rosterData.length === 0 || scheduleData.length === 0) {
-        alert('Alguno de los datos está vacío.');
+      if (scheduleData.length === 0) {
+        alert('La caja de horarios esta vacia.');
         return;
       }
 
-      // --- HEADCOUNT/PERSONAS ---
-      let rHeaderIdx = rosterData.findIndex(row => row.some(cell => cell.toUpperCase().includes('EMP ID') || cell.toUpperCase().includes('FULL NAME')));
-      if (rHeaderIdx === -1) rHeaderIdx = 0;
-      const rHeaders = rosterData[rHeaderIdx] || [];
-      let rEmpIdIdx = rHeaders.findIndex(h => h.toUpperCase().includes('EMP ID'));
-      if (rEmpIdIdx === -1) rEmpIdIdx = 0;
-      let rFullNameIdx = rHeaders.findIndex(h => h.toUpperCase().includes('FULL NAME'));
-      if (rFullNameIdx === -1) rFullNameIdx = 1;
-      let rShortNameIdx = rHeaders.findIndex(h => h.toUpperCase().includes('SHORT NAME'));
-      if (rShortNameIdx === -1) rShortNameIdx = 2;
-      let rSupervisorIdx = rHeaders.findIndex(h => h.toUpperCase().includes('SUPERVISOR'));
-      if (rSupervisorIdx === -1) rSupervisorIdx = 8;
-      const rosterList: any[] = [];
-      for (let i = 0; i < rosterData.length; i++) {
-        if (i === rHeaderIdx) continue;
-        const row = rosterData[i];
-        const fullName = row[rFullNameIdx]?.trim();
-        if (fullName && fullName.toUpperCase() !== 'FULL NAME') {
-          rosterList.push({
-            originalName: fullName,
-            normName: normalizeName(fullName),
-            parts: normalizeName(fullName).split(' '),
-            empId: row[rEmpIdIdx]?.trim() || '',
-            shortName: row[rShortNameIdx]?.trim() || '',
-            supervisor: row[rSupervisorIdx]?.trim() || ''
-          });
-        }
+      const headerIdx = scheduleData.findIndex((row) => {
+        const upper = row.map((cell) => cell.toUpperCase().trim());
+        return upper.includes('NAME') && upper.some((c) => c.includes('MON IN'));
+      });
+
+      if (headerIdx === -1) {
+        alert('No encontre el encabezado. Debe incluir Name, Attendance ID, Mon IN, Mon Out... Sun IN, Sun Out.');
+        return;
       }
 
-      // --- HORARIOS SEMANALES ---
-      // Detectar encabezados de días y columnas de horarios
-      let schedHeaderIdx = scheduleData.findIndex(row => row.some(cell => cell.toUpperCase().includes('NAME')));
-      if (schedHeaderIdx === -1) schedHeaderIdx = 0;
-      const schedHeaders = scheduleData[schedHeaderIdx] || [];
-      // Buscar columnas de entrada/salida por día
-      const dayCols: { [key: string]: { inIdx: number, outIdx: number } } = {};
+      const headers = scheduleData[headerIdx].map((h) => h.toUpperCase().trim());
+      const nameIdx = headers.findIndex((h) => h === 'NAME');
+      const attendanceIdIdx = headers.findIndex((h) => h.includes('ATTENDANCE ID'));
+
       const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-      days.forEach((d, i) => {
-        const inIdx = schedHeaders.findIndex(h => h.toUpperCase().includes(d.toUpperCase() + ' IN'));
-        const outIdx = schedHeaders.findIndex(h => h.toUpperCase().includes(d.toUpperCase() + ' OUT'));
-        dayCols[d] = { inIdx, outIdx };
-      });
-      // Nombre
-      const schedNameIdx = schedHeaders.findIndex(h => h.toUpperCase().includes('NAME'));
-
-      // --- BREAKS/LUNCH ---
-      // Buscar columnas de breaks/lunch por día
-      const breaksHeaders = breaksData[0] || [];
-      const breakCols: { [key: string]: { b1in: number, b1out: number, lunchin: number, lunchout: number, b2in: number, b2out: number } } = {};
-      days.forEach((d, i) => {
-        breakCols[d] = {
-          b1in: breaksHeaders.findIndex(h => h.toUpperCase().includes('BREAK1') && h.toUpperCase().includes(d.toUpperCase()) && h.toUpperCase().includes('START')),
-          b1out: breaksHeaders.findIndex(h => h.toUpperCase().includes('BREAK1') && h.toUpperCase().includes(d.toUpperCase()) && h.toUpperCase().includes('END')),
-          lunchin: breaksHeaders.findIndex(h => h.toUpperCase().includes('LUNCH') && h.toUpperCase().includes(d.toUpperCase()) && h.toUpperCase().includes('START')),
-          lunchout: breaksHeaders.findIndex(h => h.toUpperCase().includes('LUNCH') && h.toUpperCase().includes(d.toUpperCase()) && h.toUpperCase().includes('END')),
-          b2in: breaksHeaders.findIndex(h => h.toUpperCase().includes('BREAK2') && h.toUpperCase().includes(d.toUpperCase()) && h.toUpperCase().includes('START')),
-          b2out: breaksHeaders.findIndex(h => h.toUpperCase().includes('BREAK2') && h.toUpperCase().includes(d.toUpperCase()) && h.toUpperCase().includes('END')),
-        };
+      const dayCols = days.map((day) => {
+        const inIdx = headers.findIndex((h) => h === `${day.toUpperCase()} IN`);
+        const outIdx = headers.findIndex((h) => h === `${day.toUpperCase()} OUT`);
+        return { day, inIdx, outIdx };
       });
 
-      // Mapear breaks/lunch por nombre normalizado
-      const breaksMap: Record<string, any> = {};
-      for (let i = 1; i < breaksData.length; i++) {
-        const row = breaksData[i];
-        const name = normalizeName(row[0]);
-        breaksMap[name] = row;
-      }
-
-      // --- UNIFICAR DATOS ---
-      const outputRows: any[] = [];
-      for (let i = schedHeaderIdx + 1; i < scheduleData.length; i++) {
-        const schedRow = scheduleData[i];
-        const schedName = schedRow[schedNameIdx]?.trim();
-        if (!schedName) continue;
-        const normName = normalizeName(schedName);
-        // Buscar en headcount
-        let rosterInfo = rosterList.find(r => r.normName === normName);
-        if (!rosterInfo) {
-          // Fallback: buscar por similaridad
-          rosterInfo = rosterList.find(r => isSimilar(r.normName, normName));
-        }
-        // Buscar breaks/lunch
-        let breaksRow = breaksMap[normName];
-        // Si no hay breaks, buscar a alguien con el mismo horario
-        let horarioClave = '';
-        let horarioObj: any = {};
-        days.forEach(d => {
-          horarioObj[d] = {
-            in: schedRow[dayCols[d].inIdx]?.trim().toUpperCase(),
-            out: schedRow[dayCols[d].outIdx]?.trim().toUpperCase(),
-          };
-          horarioClave += `${horarioObj[d].in}-${horarioObj[d].out}|`;
-        });
-        if (!breaksRow && horarioClave) {
-          // Buscar otro agente con el mismo horario
-          for (const [otherName, otherRow] of Object.entries(breaksMap)) {
-            let match = true;
-            days.forEach(d => {
-              const idxIn = dayCols[d].inIdx;
-              const idxOut = dayCols[d].outIdx;
-              if (
-                (schedRow[idxIn]?.trim().toUpperCase() !== scheduleData[schedHeaderIdx + 1][idxIn]?.trim().toUpperCase()) ||
-                (schedRow[idxOut]?.trim().toUpperCase() !== scheduleData[schedHeaderIdx + 1][idxOut]?.trim().toUpperCase())
-              ) {
-                match = false;
-              }
-            });
-            if (match) {
-              breaksRow = otherRow;
-              break;
-            }
-          }
-        }
-        // Si sigue sin haber breaks, poner genérico
-        function genericBreak(horario: { in: string, out: string }) {
-          if (horario.in === 'OFF' || horario.in === 'MAT' || horario.in === 'VACATION' || !horario.in) return { b1in: '', b1out: '', lunchin: '', lunchout: '', b2in: '', b2out: '' };
-          // Ejemplo: break 2h después de entrada, lunch 4h después, break2 2h antes de salida
-          const [hIn, mIn] = horario.in.split(':').map(Number);
-          const [hOut, mOut] = horario.out.split(':').map(Number);
-          const minsIn = hIn * 60 + (mIn || 0);
-          const minsOut = hOut * 60 + (mOut || 0);
-          const dur = minsOut - minsIn;
-          if (isNaN(dur) || dur < 300) return { b1in: '', b1out: '', lunchin: '', lunchout: '', b2in: '', b2out: '' };
-          return {
-            b1in: `${String(hIn + 2).padStart(2, '0')}:00`,
-            b1out: `${String(hIn + 2).padStart(2, '0')}:15`,
-            lunchin: `${String(hIn + 4).padStart(2, '0')}:00`,
-            lunchout: `${String(hIn + 4).padStart(2, '0')}:30`,
-            b2in: `${String(hOut - 2).padStart(2, '0')}:00`,
-            b2out: `${String(hOut - 2).padStart(2, '0')}:15`,
-          };
-        }
-        // Por cada día
-        for (let d = 0; d < days.length; d++) {
-          const day = days[d];
-          const horario = horarioObj[day];
-          let status = horario.in;
-          if (["OFF", "MAT", "MATERNITY LEAVE", "VACATION", "ABSENT", "REST", "REST DAY", "MATERNIDAD", "VAC"].includes(status)) {
-            status = status === "MATERNITY LEAVE" ? "MAT" : status;
-          }
-          // Fecha
-          const [y, m, dd] = weekStartDate.split('-');
-          const dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(dd));
-          dateObj.setDate(dateObj.getDate() + d);
-          // Breaks/lunch
-          let breaks = { b1in: '', b1out: '', lunchin: '', lunchout: '', b2in: '', b2out: '' };
-          if (breaksRow) {
-            breaks = {
-              b1in: breaksRow[breakCols[day].b1in] || '',
-              b1out: breaksRow[breakCols[day].b1out] || '',
-              lunchin: breaksRow[breakCols[day].lunchin] || '',
-              lunchout: breaksRow[breakCols[day].lunchout] || '',
-              b2in: breaksRow[breakCols[day].b2in] || '',
-              b2out: breaksRow[breakCols[day].b2out] || '',
-            };
-          } else {
-            breaks = genericBreak(horario);
-          }
-          outputRows.push({
-            Name: schedName,
-            EmpId: rosterInfo?.empId || '',
-            Date: formatDate(dateObj),
-            Day: day,
-            In: horario.in,
-            Out: horario.out,
-            Status: status,
-            Break1In: breaks.b1in,
-            Break1Out: breaks.b1out,
-            LunchIn: breaks.lunchin,
-            LunchOut: breaks.lunchout,
-            Break2In: breaks.b2in,
-            Break2Out: breaks.b2out,
-          });
-        }
-      }
-      setOutputData(outputRows);
-      alert(`¡Generado! ${outputRows.length} filas.`);
-    } catch (error: any) {
-      console.error(error);
-      alert(`Ocurrió un error: ${error.message}`);
-    }
-  };
-      let shiftStartIndices: number[] = [];
-      let shiftEndIndices: number[] = [];
-      let b1StartIndices: number[] = [];
-      let b1EndIndices: number[] = [];
-      let lunchStartIndices: number[] = [];
-      let lunchEndIndices: number[] = [];
-      let b2StartIndices: number[] = [];
-      let b2EndIndices: number[] = [];
-      let breakLunchDisplayIndices: number[] = [];
-
-      if (sHeaderIdx !== -1) {
-        const sHeaders = scheduleData[sHeaderIdx] || [];
-        idNameIdx = sHeaders.findIndex(h => h.toUpperCase().replace(/\s+/g, '').includes('ID-NAME') || h.toUpperCase().replace(/\s+/g, '').includes('NAME'));
-        idIdx = sHeaders.findIndex(h => h.toUpperCase().replace(/\s+/g, '') === 'ID' || h.toUpperCase().replace(/\s+/g, '') === 'EMPID');
-
-        sHeaders.forEach((h, i) => {
-          const normH = h.toUpperCase().replace(/\s+/g, '');
-          if (normH.includes('SHIFTSTART')) shiftStartIndices.push(i);
-          if (normH.includes('SHIFTEND')) shiftEndIndices.push(i);
-          if (normH.includes('BREAK1START')) b1StartIndices.push(i);
-          if (normH.includes('BREAK1END')) b1EndIndices.push(i);
-          if (normH.includes('LUNCHSTART')) lunchStartIndices.push(i);
-          if (normH.includes('LUNCHEND')) lunchEndIndices.push(i);
-          if (normH.includes('BREAK2START')) b2StartIndices.push(i);
-          if (normH.includes('BREAK2END')) b2EndIndices.push(i);
-          if (normH.includes('BREAKLUNCHSCHEDULEDDISPLAY')) breakLunchDisplayIndices.push(i);
-        });
-      }
-
-      // Auto-detect columns if headers are missing or incomplete
-      if (shiftStartIndices.length < 7 || shiftEndIndices.length < 7 || idNameIdx === -1) {
-        // Find the first row that looks like it has time data
-        const dataRow = scheduleData.find(row => row.some(cell => /^\d{1,2}:\d{2}/.test(cell.trim()) || cell.trim().toUpperCase() === 'OFF'));
-        if (dataRow) {
-          const firstTimeIdx = dataRow.findIndex(cell => /^\d{1,2}:\d{2}/.test(cell.trim()) || cell.trim().toUpperCase() === 'OFF');
-          if (firstTimeIdx > 0) {
-            if (idNameIdx === -1) idNameIdx = firstTimeIdx - 1; // Name is usually right before the first time
-            
-            shiftStartIndices = [];
-            shiftEndIndices = [];
-            for (let i = 0; i < 7; i++) {
-              shiftStartIndices.push(firstTimeIdx + (i * 2));
-              shiftEndIndices.push(firstTimeIdx + (i * 2) + 1);
-            }
-          }
-        }
-      }
-
-      if (shiftStartIndices.length < 7 || shiftEndIndices.length < 7 || idNameIdx === -1) {
-        alert('Could not detect the Schedule columns. Please ensure you copied the data correctly including the times.');
+      const hasMissingDayColumns = dayCols.some((d) => d.inIdx === -1 || d.outIdx === -1);
+      if (nameIdx === -1 || attendanceIdIdx === -1 || hasMissingDayColumns) {
+        alert('Faltan columnas requeridas: Name, Attendance ID y columnas IN/OUT de lunes a domingo.');
         return;
       }
 
-      const [y, m, d] = weekStartDate.split('-');
-      const startDate = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
-      const newOutput = [];
+      const fallbackYear = weekStartDate ? Number(weekStartDate.split('-')[0]) : new Date().getFullYear();
+      const hasWeekStart = Boolean(weekStartDate);
+      const weekStart = hasWeekStart
+        ? new Date(
+            Number(weekStartDate.split('-')[0]),
+            Number(weekStartDate.split('-')[1]) - 1,
+            Number(weekStartDate.split('-')[2])
+          )
+        : null;
 
-      for (let i = 0; i < scheduleData.length; i++) {
-        if (i === sHeaderIdx) continue;
-        const row = scheduleData[i];
-        if (!row || row.length < 5) continue;
+      const dateHeaderRow = headerIdx > 0 ? scheduleData[headerIdx - 1] : [];
 
-        const fullName = row[idNameIdx]?.trim();
-        // Skip if empty or looks like a sub-header (e.g., "Mon", "Tue")
-        if (!fullName || fullName.toUpperCase().includes('ID-NAME') || fullName.toUpperCase() === 'MON' || fullName.toUpperCase() === 'TUE') continue;
+      const dayDatesByColumn = dayCols.map((dc) => {
+        const fromHeader = parseHeaderDateToken((dateHeaderRow?.[dc.inIdx] || '').trim(), fallbackYear);
+        return fromHeader;
+      });
 
-        const normSch = normalizeName(fullName);
-        const schParts = normSch.split(' ');
+      const sequentialHeaderDates = (dateHeaderRow || [])
+        .map((cell) => parseHeaderDateToken((cell || '').trim(), fallbackYear))
+        .filter((d): d is Date => d !== null);
 
-        let rosterInfo = rosterList.find(r => r.normName === normSch);
+      // Some exports place the first date in col 0 and then leave blanks between days.
+      // In that case, mapping by column index shifts dates by +1 day. Prefer sequential mapping.
+      const dayDates = sequentialHeaderDates.length >= 7
+        ? sequentialHeaderDates.slice(0, 7)
+        : dayDatesByColumn;
 
-        // Fallback 1: Match by Short Name
-        if (!rosterInfo) {
-          rosterInfo = rosterList.find(r => normalizeName(r.shortName) === normSch);
+      const hasHeaderDates = dayDates.some((d) => d !== null);
+      if (!hasHeaderDates && !weekStart) {
+        alert('No pude detectar las fechas de la fila superior (ej: 30-Mar, 1-Apr). Ingresa Week Start Date o pega esa fila.');
+        return;
+      }
+
+      const rosterRows = headcountDataStr.trim() ? parseTSV(headcountDataStr.trim()) : [];
+      const rosterEntries: Array<{
+        empId: string;
+        shortName: string;
+        normFull: string;
+        normShort: string;
+        fullTokens: string[];
+        shortTokens: string[];
+      }> = [];
+      const rosterByFullName: Record<string, { empId: string; shortName: string }> = {};
+      const rosterByShortName: Record<string, { empId: string; shortName: string }> = {};
+      const rosterByFirstLast: Record<string, { empId: string; shortName: string }> = {};
+
+      if (rosterRows.length > 0) {
+        let rHeaderIdx = rosterRows.findIndex((row) =>
+          row.some((cell) => {
+            const c = cell.toUpperCase();
+            return c.includes('EMP ID') || c.includes('FULL NAME') || c.includes('SHORT NAME');
+          })
+        );
+        if (rHeaderIdx === -1) rHeaderIdx = 0;
+
+        const rHeaders = rosterRows[rHeaderIdx] || [];
+        const normalizedHeaders = rHeaders.map((h) => normalizeHeader(h));
+        const empIdIdx = normalizedHeaders.findIndex((h) => h === 'empid' || h === 'employeeid' || h === 'id');
+        const fullNameIdx = normalizedHeaders.findIndex((h) => h === 'fullname' || h === 'name');
+        const shortNameIdx = normalizedHeaders.findIndex((h) => h === 'shortname' || h === 'nickname' || h === 'alias');
+
+        if (empIdIdx === -1 || fullNameIdx === -1 || shortNameIdx === -1) {
+          alert('No pude leer el headcount. Asegurate de pegar columnas: Emp ID, Full Name, Short Name.');
+          return;
         }
 
-        // Fallback 2: All words in Roster's Short Name are in Schedule Name
-        if (!rosterInfo) {
-          rosterInfo = rosterList.find(r => {
-            const rShortParts = normalizeName(r.shortName).split(' ');
-            return rShortParts.length >= 2 && rShortParts.every((p: string) => schParts.includes(p));
-          });
+        for (let i = rHeaderIdx + 1; i < rosterRows.length; i++) {
+          const row = rosterRows[i];
+          const empId = String(row[empIdIdx] || '').trim().replace(/\s+/g, '');
+          const fullName = (row[fullNameIdx] || '').trim();
+          const shortName = (row[shortNameIdx] || '').trim();
+
+          if (!fullName && !shortName) continue;
+
+          const normFull = normalizeName(fullName);
+          const normShort = normalizeName(shortName);
+          const item = { empId, shortName, normFull, normShort, fullTokens: tokenizeName(fullName), shortTokens: tokenizeName(shortName) };
+
+          if (normFull) rosterByFullName[normFull] = { empId, shortName };
+          if (normShort) rosterByShortName[normShort] = { empId, shortName };
+          const flKey = firstLastKey(item.fullTokens);
+          if (flKey) rosterByFirstLast[flKey] = { empId, shortName };
+          rosterEntries.push(item);
+        }
+      }
+
+      const findRosterMatch = (fullName: string) => {
+        const normalized = normalizeName(fullName);
+        const scheduleTokens = tokenizeName(fullName);
+
+        const byFull = rosterByFullName[normalized];
+        if (byFull) return byFull;
+
+        if (scheduleTokens.length >= 2) {
+          const shortCandidate = `${scheduleTokens[0]} ${scheduleTokens[1]}`;
+          const byShort = rosterByShortName[shortCandidate];
+          if (byShort) return byShort;
         }
 
-        // Fallback 3: All words in Roster's Full Name are in Schedule Name
-        if (!rosterInfo) {
-          rosterInfo = rosterList.find(r => {
-            return r.parts.length >= 2 && r.parts.every((p: string) => schParts.includes(p));
-          });
+        const flKey = firstLastKey(scheduleTokens);
+        if (flKey && rosterByFirstLast[flKey]) {
+          return rosterByFirstLast[flKey];
         }
 
-        // Fallback 4: First name and Third name
-        if (!rosterInfo && schParts.length >= 3) {
-          const target = `${schParts[0]} ${schParts[2]}`;
-          rosterInfo = rosterList.find(r => r.parts.length >= 3 && `${r.parts[0]} ${r.parts[2]}` === target);
-        }
-
-        // Fallback 5: First name and Last name
-        if (!rosterInfo && schParts.length >= 2) {
-          const target = `${schParts[0]} ${schParts[schParts.length - 1]}`;
-          rosterInfo = rosterList.find(r => r.parts.length >= 2 && `${r.parts[0]} ${r.parts[r.parts.length - 1]}` === target);
-        }
-
-        // Fallback 6: First name and Second name
-        if (!rosterInfo && schParts.length >= 2) {
-          const target = `${schParts[0]} ${schParts[1]}`;
-          rosterInfo = rosterList.find(r => r.parts.length >= 2 && `${r.parts[0]} ${r.parts[1]}` === target);
-        }
-
-        // Fallback 7: Fuzzy match for typos (e.g. Gladis vs Gladys, Moterroso vs Monterroso)
-        if (!rosterInfo && schParts.length >= 2) {
-          rosterInfo = rosterList.find(r => {
-            if (r.parts.length >= 2 && r.parts[0].length >= 4 && schParts[0].length >= 4) {
-              const firstNameMatch = r.parts[0].substring(0, 4) === schParts[0].substring(0, 4);
-              const surnameMatch = r.parts.some((rp: string, i: number) => {
-                if (i === 0) return false;
-                return schParts.some(sp => isSimilar(rp, sp));
-              });
-              return firstNameMatch && surnameMatch;
+        // Token scoring: robust for names with middle names or slight ordering differences.
+        let best:
+          | {
+              empId: string;
+              shortName: string;
+              score: number;
             }
-            return false;
-          });
-        }
+          | undefined;
 
-        rosterInfo = rosterInfo || {};
-        const visualCode = rosterInfo.empId || row[idIdx]?.trim() || '';
-        
-        let employeeName = '';
-        if (rosterInfo.shortName) {
-           employeeName = normalizeName(rosterInfo.shortName).replace(/\s+/g, '.');
-        } else {
-           // LatAm naming convention fallback: Primer Nombre + Primer Apellido
-           if (schParts.length >= 4) {
-             employeeName = `${schParts[0]}.${schParts[2]}`;
-           } else if (schParts.length >= 2) {
-             employeeName = `${schParts[0]}.${schParts[1]}`;
-           } else {
-             employeeName = schParts[0] || '';
-           }
-        }
-        
-        // Always use the default team as requested
-        const team = defaultTeam;
+        for (const entry of rosterEntries) {
+          const firstEntryToken = entry.shortTokens[0] || entry.fullTokens[0] || '';
+          const firstScheduleToken = scheduleTokens[0] || '';
+          if (!firstEntryToken || !firstScheduleToken || !tokenMatchesLoose(firstEntryToken, firstScheduleToken)) continue;
 
-        let rawStarts = [];
-        let rawEnds = [];
-        let rawB1Starts = [];
-        let rawB1Ends = [];
-        let rawB2Starts = [];
-        let rawB2Ends = [];
-        let rawLStarts = [];
-        let rawLEnds = [];
+          let score = 0;
 
-        for (let day = 0; day < 7; day++) {
-          rawStarts.push(row[shiftStartIndices[day]]?.trim() || '');
-          rawEnds.push(row[shiftEndIndices[day]]?.trim() || '');
-          rawB1Starts.push(b1StartIndices[day] !== undefined ? row[b1StartIndices[day]]?.trim() || '' : '');
-          rawB1Ends.push(b1EndIndices[day] !== undefined ? row[b1EndIndices[day]]?.trim() || '' : '');
-          rawB2Starts.push(b2StartIndices[day] !== undefined ? row[b2StartIndices[day]]?.trim() || '' : '');
-          rawB2Ends.push(b2EndIndices[day] !== undefined ? row[b2EndIndices[day]]?.trim() || '' : '');
-          rawLStarts.push(lunchStartIndices[day] !== undefined ? row[lunchStartIndices[day]]?.trim() || '' : '');
-          rawLEnds.push(lunchEndIndices[day] !== undefined ? row[lunchEndIndices[day]]?.trim() || '' : '');
-        }
+          if (entry.normShort && entry.normShort === normalized) score += 100;
+          if (entry.normFull && entry.normFull === normalized) score += 110;
 
-        // Check for "Starts then Ends" format (pasted incorrectly into interleaved columns)
-        let invalidShifts = 0;
-        for (let day = 0; day < 7; day++) {
-          const s = rawStarts[day].toUpperCase();
-          const e = rawEnds[day].toUpperCase();
-          const isOffS = s === 'OFF' || s === '';
-          const isOffE = e === 'OFF' || e === '';
-          
-          if (isOffS !== isOffE) {
-            invalidShifts++;
-          } else if (!isOffS && !isOffE && s === e) {
-            invalidShifts++;
+          const shortContained =
+            entry.shortTokens.length >= 2 &&
+            entry.shortTokens.every((t) => scheduleTokens.some((st) => tokenMatchesLoose(t, st)));
+          if (shortContained) score += 60;
+
+          const fullOverlap = countLooseOverlap(entry.fullTokens, scheduleTokens);
+          const shortOverlap = countLooseOverlap(entry.shortTokens, scheduleTokens);
+
+          score += fullOverlap * 4;
+          score += shortOverlap * 8;
+
+          if (score > 0 && (!best || score > best.score)) {
+            best = { empId: entry.empId, shortName: entry.shortName, score };
           }
         }
 
-        if (invalidShifts >= 4) {
-          // Reconstruct the original 14 values in order for each category
-          const rearrange = (starts: string[], ends: string[]) => {
-            const v = [];
-            for (let day = 0; day < 7; day++) {
-              v.push(starts[day]);
-              v.push(ends[day]);
-            }
-            return [v.slice(0, 7), v.slice(7, 14)];
-          };
-
-          [rawStarts, rawEnds] = rearrange(rawStarts, rawEnds);
-          [rawB1Starts, rawB1Ends] = rearrange(rawB1Starts, rawB1Ends);
-          [rawB2Starts, rawB2Ends] = rearrange(rawB2Starts, rawB2Ends);
-          [rawLStarts, rawLEnds] = rearrange(rawLStarts, rawLEnds);
+        if (best && best.score >= 20) {
+          return { empId: best.empId, shortName: best.shortName };
         }
 
+        return undefined;
+      };
+
+      const out: OutputRow[] = [];
+      const unmatchedNames = new Set<string>();
+
+      for (let rowIdx = headerIdx + 1; rowIdx < scheduleData.length; rowIdx++) {
+        const row = scheduleData[rowIdx];
+        if (!row || row.length === 0) continue;
+
+        const fullName = (row[nameIdx] || '').trim();
+        if (!fullName) continue;
+
+        const attendanceId = (row[attendanceIdIdx] || '').trim();
+        const rosterMatch = findRosterMatch(fullName);
+
+        if (headcountDataStr.trim() && !rosterMatch) {
+          unmatchedNames.add(fullName);
+        }
+
+        const visualCode = rosterMatch?.empId || parseVisualCode(attendanceId);
+        const employeeName = rosterMatch?.shortName
+          ? normalizeName(rosterMatch.shortName).replace(/\s+/g, '.')
+          : toEmployeeName(fullName);
+
         for (let day = 0; day < 7; day++) {
-          const sStart = rawStarts[day];
-          const sEnd = rawEnds[day];
+          const inRaw = (row[dayCols[day].inIdx] || '').trim();
+          const outRaw = (row[dayCols[day].outIdx] || '').trim();
 
-          if (!sStart && !sEnd) continue;
-          if (sStart.toUpperCase() === 'MON' || sStart.toUpperCase() === 'TUE') continue;
+          if (!inRaw && !outRaw) continue;
 
-          const isOff = sStart.toUpperCase() === 'OFF' || sStart === '';
-          const schIn = convertTime(sStart);
-          const schOut = convertTime(sEnd);
-          const minutes = calculateMinutes(schIn, schOut);
+          const statusRaw = normalizeStatus(inRaw);
+          const statusLabels = getStatusLabels(statusRaw);
+          const statusOnlyCell = Boolean(statusLabels) && !isClockTime(inRaw);
+          const isOff = !inRaw || statusOnlyCell ? (statusLabels?.isOff ?? true) : false;
 
-          const b1In = convertTime(rawB1Starts[day]);
-          const b1Out = convertTime(rawB1Ends[day]);
-          const b2In = convertTime(rawB2Starts[day]);
-          const b2Out = convertTime(rawB2Ends[day]);
-          const lIn = convertTime(rawLStarts[day]);
-          const lOut = convertTime(rawLEnds[day]);
+          const schIn = isOff ? '00:00' : convertTime(inRaw);
+          const schOut = isOff ? '00:00' : convertTime(outRaw);
+          const minutes = isOff ? 0 : calculateMinutes(schIn, schOut);
 
-          const breakMins = calculateMinutes(b1In, b1Out) + calculateMinutes(b2In, b2Out);
-          const lunchMins = calculateMinutes(lIn, lOut);
+          const date = dayDates[day]
+            ? new Date(dayDates[day] as Date)
+            : new Date(weekStart as Date);
 
-          let breakLunchStr = '';
-          if (breakLunchDisplayIndices[day] !== undefined && row[breakLunchDisplayIndices[day]]) {
-            breakLunchStr = row[breakLunchDisplayIndices[day]].trim();
-          } else if (!isOff && (breakMins > 0 || lunchMins > 0)) {
-            breakLunchStr = `Lunch: ${formatDuration(lunchMins)}\nBreak: ${formatDuration(breakMins)}`;
+          if (!dayDates[day]) {
+            date.setDate(date.getDate() + day);
           }
 
-          const currentDate = new Date(startDate);
-          currentDate.setDate(currentDate.getDate() + day);
-
-          newOutput.push({
+          out.push({
             VisualCode: visualCode,
             Campaign: campaignName,
-            Team: team,
+            Team: defaultTeam,
             EmployeeName: employeeName,
-            Date: formatDate(currentDate),
+            Date: formatDate(date),
             SchIn: schIn,
             SchOut: schOut,
             PnchIn: '',
             PnchOut: '',
-            Staffed: isOff ? 0 : minutes,
-            Scheduled: isOff ? 0 : minutes,
+            Staffed: minutes,
+            Scheduled: minutes,
             Paused: 0,
-            Remark: isOff ? 'Rest Day' : 'Present',
-            ScheduleType: isOff ? 'Rest Day' : ' Regular',
+            Remark: statusLabels?.remark ?? (isOff ? 'Rest Day' : 'Present'),
+            ScheduleType: statusLabels?.scheduleType ?? (isOff ? 'Rest Day' : ' Regular'),
             WorkType: isOff ? '' : defaultWorkType,
-            BreakLunchScheduledDisplay: breakLunchStr,
+            BreakLunchScheduledDisplay: '',
             BreakLunchStaffedDisplay: '',
-            BreakLunchRemark: ''
+            BreakLunchRemark: '',
           });
         }
       }
 
-      if (newOutput.length === 0) {
-        alert('No data could be generated. Please check if the columns match the expected format.');
-      } else {
-        setOutputData(newOutput);
-        alert(`Successfully generated ${newOutput.length} rows!`);
+      if (out.length === 0) {
+        alert('No se generaron filas. Verifica que pegaste toda la tabla de horarios.');
+        return;
       }
+
+      setOutputData(out);
+      if (headcountDataStr.trim() && unmatchedNames.size > 0) {
+        const sample = Array.from(unmatchedNames).slice(0, 8).join(', ');
+        alert(`Generado: ${out.length} filas. Ojo: ${unmatchedNames.size} nombres no hicieron match con headcount. Ejemplos: ${sample}`);
+        return;
+      }
+      alert(`Generado: ${out.length} filas.`);
     } catch (error: any) {
       console.error(error);
-      alert(`An error occurred: ${error.message}`);
+      alert(`Ocurrio un error: ${error.message}`);
     }
   };
 
   const handleCopy = () => {
     if (outputData.length === 0) return;
+
     const headers = Object.keys(outputData[0]);
     const tsv = [
       headers.join('\t'),
-      ...outputData.map(row => headers.map(h => {
-        let val = String(row[h] || '');
-        if (val.includes('\n') || val.includes('\t') || val.includes('"')) {
-          val = `"${val.replace(/"/g, '""')}"`;
-        }
-        return val;
-      }).join('\t'))
+      ...outputData.map((row) =>
+        headers
+          .map((h) => {
+            let val = String((row as any)[h] || '');
+            if (val.includes('\n') || val.includes('\t') || val.includes('"')) {
+              val = `"${val.replace(/"/g, '""')}"`;
+            }
+            return val;
+          })
+          .join('\t')
+      ),
     ].join('\n');
+
     navigator.clipboard.writeText(tsv);
-    alert('Copied to clipboard!');
+    alert('Copiado al portapapeles.');
   };
 
   const handleExportCSV = () => {
     if (outputData.length === 0) return;
+
     const headers = Object.keys(outputData[0]);
     const csv = [
       headers.join(','),
-      ...outputData.map(row => headers.map(h => {
-        let val = String(row[h] || '');
-        if (val.includes(',') || val.includes('\n') || val.includes('"')) {
-          val = `"${val.replace(/"/g, '""')}"`;
-        }
-        return val;
-      }).join(','))
+      ...outputData.map((row) =>
+        headers
+          .map((h) => {
+            let val = String((row as any)[h] || '');
+            if (val.includes(',') || val.includes('\n') || val.includes('"')) {
+              val = `"${val.replace(/"/g, '""')}"`;
+            }
+            return val;
+          })
+          .join(',')
+      ),
     ].join('\n');
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -641,42 +632,30 @@ export default function App() {
           <h1 className="text-2xl font-semibold text-slate-800">Schedule Transformer</h1>
         </header>
 
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 gap-6">
           <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col">
             <label className="flex items-center space-x-2 text-sm font-medium text-slate-700 mb-2">
               <FileSpreadsheet size={18} className="text-indigo-500" />
-              <span>Caja 1: Breaks y Lunch (formato detallado)</span>
+              <span>Caja 1: Horarios Semanales</span>
             </label>
-            <textarea 
-              className="flex-1 min-h-[200px] p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y font-mono whitespace-pre"
-              placeholder="Pega aquí los breaks y lunch (formato detallado, imagen 1)..."
-              value={breaksDataStr}
-              onChange={e => setBreaksDataStr(e.target.value)}
-            />
-          </div>
-          <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col">
-            <label className="flex items-center space-x-2 text-sm font-medium text-slate-700 mb-2">
-              <Users size={18} className="text-emerald-500" />
-              <span>Caja 2: Headcount/Detalle</span>
-            </label>
-            <textarea 
-              className="flex-1 min-h-[200px] p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none resize-y font-mono whitespace-pre"
-              placeholder="Pega aquí el headcount/detalle..."
-              value={rosterDataStr}
-              onChange={e => setRosterDataStr(e.target.value)}
-            />
-          </div>
-          <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col">
-            <label className="flex items-center space-x-2 text-sm font-medium text-slate-700 mb-2">
-              <FileSpreadsheet size={18} className="text-indigo-500" />
-              <span>Caja 3: Horarios Semanales</span>
-            </label>
-            <textarea 
-              className="flex-1 min-h-[200px] p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y font-mono whitespace-pre"
-              placeholder="Pega aquí los horarios semanales (formato tabla semanal)..."
+            <textarea
+              className="flex-1 min-h-[260px] p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y font-mono whitespace-pre"
+              placeholder="Pega aqui la tabla de horarios (Name, Attendance ID, Mon IN/OUT ... Sun IN/OUT)"
               value={scheduleDataStr}
-              onChange={e => setScheduleDataStr(e.target.value)}
+              onChange={(e) => setScheduleDataStr(e.target.value)}
+            />
+          </div>
+
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col">
+            <label className="flex items-center space-x-2 text-sm font-medium text-slate-700 mb-2">
+              <FileSpreadsheet size={18} className="text-indigo-500" />
+              <span>Caja 2 (opcional): Headcount (Emp ID, Full Name, Short Name)</span>
+            </label>
+            <textarea
+              className="flex-1 min-h-[180px] p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y font-mono whitespace-pre"
+              placeholder="Pega aqui el headcount para mapear VisualCode y EmployeeName"
+              value={headcountDataStr}
+              onChange={(e) => setHeadcountDataStr(e.target.value)}
             />
           </div>
         </div>
@@ -684,41 +663,41 @@ export default function App() {
         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex flex-wrap items-end gap-4">
           <div className="flex flex-col space-y-1">
             <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Week Start Date (Monday)</label>
-            <input 
-              type="date" 
+            <input
+              type="date"
               className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
               value={weekStartDate}
-              onChange={e => setWeekStartDate(e.target.value)}
+              onChange={(e) => setWeekStartDate(e.target.value)}
             />
           </div>
           <div className="flex flex-col space-y-1">
             <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Campaign Name</label>
-            <input 
-              type="text" 
+            <input
+              type="text"
               className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
               value={campaignName}
-              onChange={e => setCampaignName(e.target.value)}
+              onChange={(e) => setCampaignName(e.target.value)}
             />
           </div>
           <div className="flex flex-col space-y-1">
             <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Default Team</label>
-            <input 
-              type="text" 
+            <input
+              type="text"
               className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
               value={defaultTeam}
-              onChange={e => setDefaultTeam(e.target.value)}
+              onChange={(e) => setDefaultTeam(e.target.value)}
             />
           </div>
           <div className="flex flex-col space-y-1">
             <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Default Work Type</label>
-            <input 
-              type="text" 
+            <input
+              type="text"
               className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none w-32"
               value={defaultWorkType}
-              onChange={e => setDefaultWorkType(e.target.value)}
+              onChange={(e) => setDefaultWorkType(e.target.value)}
             />
           </div>
-          <button 
+          <button
             onClick={handleGenerate}
             className="ml-auto px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-sm transition-colors flex items-center space-x-2"
           >
@@ -735,14 +714,14 @@ export default function App() {
                 <span>Generated Output ({outputData.length} rows)</span>
               </h2>
               <div className="flex items-center space-x-2">
-                <button 
+                <button
                   onClick={handleCopy}
                   className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-medium rounded-lg shadow-sm transition-colors flex items-center space-x-2 text-sm"
                 >
                   <ClipboardCopy size={16} />
                   <span>Copy TSV</span>
                 </button>
-                <button 
+                <button
                   onClick={handleExportCSV}
                   className="px-4 py-2 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 font-medium rounded-lg shadow-sm transition-colors flex items-center space-x-2 text-sm"
                 >
@@ -755,8 +734,10 @@ export default function App() {
               <table className="w-full text-sm text-left whitespace-nowrap">
                 <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
                   <tr>
-                    {Object.keys(outputData[0]).map(key => (
-                      <th key={key} className="px-4 py-3 font-medium tracking-wider">{key}</th>
+                    {Object.keys(outputData[0]).map((key) => (
+                      <th key={key} className="px-4 py-3 font-medium tracking-wider">
+                        {key}
+                      </th>
                     ))}
                   </tr>
                 </thead>
@@ -764,7 +745,9 @@ export default function App() {
                   {outputData.slice(0, 100).map((row, i) => (
                     <tr key={i} className="hover:bg-slate-50/50">
                       {Object.values(row).map((val: any, j) => (
-                        <td key={j} className="px-4 py-2 text-slate-600">{val}</td>
+                        <td key={j} className="px-4 py-2 text-slate-600">
+                          {val}
+                        </td>
                       ))}
                     </tr>
                   ))}
