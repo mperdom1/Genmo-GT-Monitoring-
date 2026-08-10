@@ -25,3 +25,11 @@ View your app in AI Studio: https://ai.studio/apps/9d65ffb0-b22c-4775-a76c-f4120
    `npm run build`
 2. Preview the built site locally:
    `npm run preview`
+
+## Deploy to GitHub Pages
+
+1. Ensure the repository is set up on GitHub.
+2. Run:
+   `npm run deploy`
+3. Your app will be published at:
+   `https://mperdom1.github.io/Genmo-GT-Monitoring-/`
