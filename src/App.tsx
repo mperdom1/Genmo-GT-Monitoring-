@@ -323,7 +323,7 @@ export default function App() {
 
       const headers = scheduleData[headerIdx].map((h) => h.toUpperCase().trim());
       const nameIdx = headers.findIndex((h) => h === 'NAME');
-      const attendanceIdIdx = headers.findIndex((h) => h.includes('ATTENDANCE ID'));
+      const attendanceIdIdx = headers.findIndex((h) => h.includes('ATTENDANCE'));
 
       const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       const dayCols = days.map((day) => {
@@ -372,17 +372,7 @@ export default function App() {
       }
 
       const rosterRows = headcountDataStr.trim() ? parseTSV(headcountDataStr.trim()) : [];
-      const rosterEntries: Array<{
-        empId: string;
-        shortName: string;
-        normFull: string;
-        normShort: string;
-        fullTokens: string[];
-        shortTokens: string[];
-      }> = [];
-      const rosterByFullName: Record<string, { empId: string; shortName: string }> = {};
-      const rosterByShortName: Record<string, { empId: string; shortName: string }> = {};
-      const rosterByFirstLast: Record<string, { empId: string; shortName: string }> = {};
+      const rosterByExtension: Record<string, { empId: string; shortName: string }> = {};
 
       if (rosterRows.length > 0) {
         let rHeaderIdx = rosterRows.findIndex((row) =>
@@ -398,9 +388,10 @@ export default function App() {
         const empIdIdx = normalizedHeaders.findIndex((h) => h === 'empid' || h === 'employeeid' || h === 'id');
         const fullNameIdx = normalizedHeaders.findIndex((h) => h === 'fullname' || h === 'name');
         const shortNameIdx = normalizedHeaders.findIndex((h) => h === 'shortname' || h === 'nickname' || h === 'alias');
+        const extensionIdx = normalizedHeaders.findIndex((h) => h === 'extension' || h === 'ext');
 
-        if (empIdIdx === -1 || fullNameIdx === -1 || shortNameIdx === -1) {
-          alert('No pude leer el headcount. Asegurate de pegar columnas: Emp ID, Full Name, Short Name.');
+        if (empIdIdx === -1 || fullNameIdx === -1 || shortNameIdx === -1 || extensionIdx === -1) {
+          alert('No pude leer el headcount. Asegurate de pegar columnas: Emp ID, Full Name, Short Name, Extension.');
           return;
         }
 
@@ -409,83 +400,16 @@ export default function App() {
           const empId = String(row[empIdIdx] || '').trim().replace(/\s+/g, '');
           const fullName = (row[fullNameIdx] || '').trim();
           const shortName = (row[shortNameIdx] || '').trim();
+          const extension = String(row[extensionIdx] || '').trim().replace(/\D/g, '');
 
-          if (!fullName && !shortName) continue;
-
-          const normFull = normalizeName(fullName);
-          const normShort = normalizeName(shortName);
-          const item = { empId, shortName, normFull, normShort, fullTokens: tokenizeName(fullName), shortTokens: tokenizeName(shortName) };
-
-          if (normFull) rosterByFullName[normFull] = { empId, shortName };
-          if (normShort) rosterByShortName[normShort] = { empId, shortName };
-          const flKey = firstLastKey(item.fullTokens);
-          if (flKey) rosterByFirstLast[flKey] = { empId, shortName };
-          rosterEntries.push(item);
+          if (extension && (empId || fullName || shortName)) {
+            rosterByExtension[extension] = { empId, shortName };
+          }
         }
       }
 
-      const findRosterMatch = (fullName: string) => {
-        const normalized = normalizeName(fullName);
-        const scheduleTokens = tokenizeName(fullName);
-
-        const byFull = rosterByFullName[normalized];
-        if (byFull) return byFull;
-
-        if (scheduleTokens.length >= 2) {
-          const shortCandidate = `${scheduleTokens[0]} ${scheduleTokens[1]}`;
-          const byShort = rosterByShortName[shortCandidate];
-          if (byShort) return byShort;
-        }
-
-        const flKey = firstLastKey(scheduleTokens);
-        if (flKey && rosterByFirstLast[flKey]) {
-          return rosterByFirstLast[flKey];
-        }
-
-        // Token scoring: robust for names with middle names or slight ordering differences.
-        let best:
-          | {
-              empId: string;
-              shortName: string;
-              score: number;
-            }
-          | undefined;
-
-        for (const entry of rosterEntries) {
-          const firstEntryToken = entry.shortTokens[0] || entry.fullTokens[0] || '';
-          const firstScheduleToken = scheduleTokens[0] || '';
-          if (!firstEntryToken || !firstScheduleToken || !tokenMatchesLoose(firstEntryToken, firstScheduleToken)) continue;
-
-          let score = 0;
-
-          if (entry.normShort && entry.normShort === normalized) score += 100;
-          if (entry.normFull && entry.normFull === normalized) score += 110;
-
-          const shortContained =
-            entry.shortTokens.length >= 2 &&
-            entry.shortTokens.every((t) => scheduleTokens.some((st) => tokenMatchesLoose(t, st)));
-          if (shortContained) score += 60;
-
-          const fullOverlap = countLooseOverlap(entry.fullTokens, scheduleTokens);
-          const shortOverlap = countLooseOverlap(entry.shortTokens, scheduleTokens);
-
-          score += fullOverlap * 4;
-          score += shortOverlap * 8;
-
-          if (score > 0 && (!best || score > best.score)) {
-            best = { empId: entry.empId, shortName: entry.shortName, score };
-          }
-        }
-
-        if (best && best.score >= 20) {
-          return { empId: best.empId, shortName: best.shortName };
-        }
-
-        return undefined;
-      };
-
       const out: OutputRow[] = [];
-      const unmatchedNames = new Set<string>();
+      const unmatchedAttendance = new Set<string>();
 
       for (let rowIdx = headerIdx + 1; rowIdx < scheduleData.length; rowIdx++) {
         const row = scheduleData[rowIdx];
@@ -495,13 +419,14 @@ export default function App() {
         if (!fullName) continue;
 
         const attendanceId = (row[attendanceIdIdx] || '').trim();
-        const rosterMatch = findRosterMatch(fullName);
+        const extension = parseVisualCode(attendanceId);
+        const rosterMatch = rosterByExtension[extension];
 
         if (headcountDataStr.trim() && !rosterMatch) {
-          unmatchedNames.add(fullName);
+          unmatchedAttendance.add(attendanceId || fullName);
         }
 
-        const visualCode = rosterMatch?.empId || parseVisualCode(attendanceId);
+        const visualCode = rosterMatch?.empId || extension;
         const employeeName = rosterMatch?.shortName
           ? normalizeName(rosterMatch.shortName).replace(/\s+/g, '.')
           : toEmployeeName(fullName);
@@ -558,9 +483,9 @@ export default function App() {
       }
 
       setOutputData(out);
-      if (headcountDataStr.trim() && unmatchedNames.size > 0) {
-        const sample = Array.from(unmatchedNames).slice(0, 8).join(', ');
-        alert(`Generado: ${out.length} filas. Ojo: ${unmatchedNames.size} nombres no hicieron match con headcount. Ejemplos: ${sample}`);
+      if (headcountDataStr.trim() && unmatchedAttendance.size > 0) {
+        const sample = Array.from(unmatchedAttendance).slice(0, 8).join(', ');
+        alert(`Generado: ${out.length} filas. Ojo: ${unmatchedAttendance.size} Attendance no hizo match con headcount. Ejemplos: ${sample}`);
         return;
       }
       alert(`Generado: ${out.length} filas.`);
@@ -649,7 +574,7 @@ export default function App() {
           <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col">
             <label className="flex items-center space-x-2 text-sm font-medium text-slate-700 mb-2">
               <FileSpreadsheet size={18} className="text-indigo-500" />
-              <span>Caja 2 (opcional): Headcount (Emp ID, Full Name, Short Name)</span>
+              <span>Caja 2 (opcional): Headcount (Emp ID, Full Name, Short Name, Extension)</span>
             </label>
             <textarea
               className="flex-1 min-h-[180px] p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y font-mono whitespace-pre"
