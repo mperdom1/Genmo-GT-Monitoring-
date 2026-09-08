@@ -273,8 +273,15 @@ const STATUS_LABELS: Record<string, { remark: string; scheduleType: string; isOf
   MATERNIDAD: { remark: 'Leave', scheduleType: 'Maternity Leave', isOff: true },
   'MATERNITY LEAVE': { remark: 'Leave', scheduleType: 'Maternity Leave', isOff: true },
   'BIRTHDAY LEAVE': { remark: 'Leave', scheduleType: 'Birthday Leave', isOff: true },
+  MEDICAL: { remark: 'Leave', scheduleType: 'Medical Leave', isOff: true },
+  'MEDICAL LEAVE': { remark: 'Leave', scheduleType: 'Medical Leave', isOff: true },
+  LOA: { remark: 'Leave', scheduleType: 'Leave of Absence', isOff: true },
+  'LEAVE OF ABSENCE': { remark: 'Leave', scheduleType: 'Leave of Absence', isOff: true },
+  HOLIDAY: { remark: 'Leave', scheduleType: 'Holiday', isOff: true },
   SUSPENSION: { remark: 'Leave', scheduleType: 'Suspension', isOff: true },
 };
+
+const TERMINATION_STATUSES = new Set(['TERM', 'TERMINATED', 'TERMINATION']);
 
 function normalizeStatus(value: string) {
   return value.toUpperCase().trim().replace(/\s+/g, ' ');
@@ -437,7 +444,11 @@ export default function App() {
 
           if (!inRaw && !outRaw) continue;
 
-          const statusRaw = normalizeStatus(inRaw);
+          const inStatus = normalizeStatus(inRaw);
+          const outStatus = normalizeStatus(outRaw);
+          if (TERMINATION_STATUSES.has(inStatus) || TERMINATION_STATUSES.has(outStatus)) continue;
+
+          const statusRaw = normalizeStatus(inRaw || outRaw);
           const statusLabels = getStatusLabels(statusRaw);
           const statusOnlyCell = Boolean(statusLabels) && !isClockTime(inRaw);
           const isOff = !inRaw || statusOnlyCell ? (statusLabels?.isOff ?? true) : false;
