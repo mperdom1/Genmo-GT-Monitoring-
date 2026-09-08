@@ -415,10 +415,10 @@ export default function App() {
         const row = scheduleData[rowIdx];
         if (!row || row.length === 0) continue;
 
-        const fullName = (row[nameIdx] || '').trim();
-        if (!fullName) continue;
-
         const attendanceId = (row[attendanceIdIdx] || '').trim();
+        const fullName = (row[nameIdx] || '').trim();
+        if (!attendanceId) continue;
+
         const extension = parseVisualCode(attendanceId);
         const rosterMatch = rosterByExtension[extension];
 
