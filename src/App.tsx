@@ -273,8 +273,11 @@ const STATUS_LABELS: Record<string, { remark: string; scheduleType: string; isOf
   MATERNIDAD: { remark: 'Leave', scheduleType: 'Maternity Leave', isOff: true },
   'MATERNITY LEAVE': { remark: 'Leave', scheduleType: 'Maternity Leave', isOff: true },
   'BIRTHDAY LEAVE': { remark: 'Leave', scheduleType: 'Birthday Leave', isOff: true },
-  MEDICAL: { remark: 'Leave', scheduleType: 'Medical Leave', isOff: true },
-  'MEDICAL LEAVE': { remark: 'Leave', scheduleType: 'Medical Leave', isOff: true },
+  MED: { remark: 'Leave', scheduleType: 'Extended Medical Leave', isOff: true },
+  MEDICAL: { remark: 'Leave', scheduleType: 'Extended Medical Leave', isOff: true },
+  'MED LEAVE': { remark: 'Leave', scheduleType: 'Extended Medical Leave', isOff: true },
+  'MEDICAL LEAVE': { remark: 'Leave', scheduleType: 'Extended Medical Leave', isOff: true },
+  EML: { remark: 'Leave', scheduleType: 'Extended Medical Leave', isOff: true },
   LOA: { remark: 'Leave', scheduleType: 'Leave of Absence', isOff: true },
   'LEAVE OF ABSENCE': { remark: 'Leave', scheduleType: 'Leave of Absence', isOff: true },
   HOLIDAY: { remark: 'Leave', scheduleType: 'Holiday', isOff: true },
@@ -289,6 +292,9 @@ function normalizeStatus(value: string) {
 
 function getStatusLabels(statusRaw: string) {
   const key = normalizeStatus(statusRaw);
+  if (key === 'EML' || /\bMED(?:ICAL)?\b/.test(key)) {
+    return { remark: 'Leave', scheduleType: 'Extended Medical Leave', isOff: true };
+  }
   return STATUS_LABELS[key];
 }
 
