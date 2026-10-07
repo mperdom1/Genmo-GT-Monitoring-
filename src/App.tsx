@@ -74,6 +74,19 @@ function parseHeaderDateToken(token: string, fallbackYear: number) {
   return new Date(fallbackYear, month, day);
 }
 
+// Las fechas del encabezado vienen sin año (ej. 31-Dec, 1-Jan). Si el mes baja de un día al
+// siguiente, la semana cruzó de año y el resto de fechas pertenece al año siguiente.
+function fixYearWrap(dates: (Date | null)[]) {
+  let yearOffset = 0;
+  let prevMonth = -1;
+  return dates.map((d) => {
+    if (!d) return null;
+    if (prevMonth !== -1 && d.getMonth() < prevMonth) yearOffset++;
+    prevMonth = d.getMonth();
+    return new Date(d.getFullYear() + yearOffset, d.getMonth(), d.getDate());
+  });
+}
+
 function normalizeName(name: string) {
   if (!name) return '';
   return name
@@ -184,77 +197,14 @@ function toEmployeeName(name: string) {
   return parts[0] || '';
 }
 
-function tokenizeName(name: string) {
-  const stopwords = new Set(['de', 'del', 'la', 'las', 'los', 'y', 'da', 'do']);
-  return normalizeName(name)
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(' ')
-    .map((t) => t.trim())
-    .filter((t) => t && !stopwords.has(t));
-}
 
 function normalizeHeader(header: string) {
   return (header || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-function firstLastKey(tokens: string[]) {
-  if (!tokens.length) return '';
-  if (tokens.length === 1) return tokens[0];
-  return `${tokens[0]} ${tokens[tokens.length - 1]}`;
-}
 
-function tokenDistance(a: string, b: string) {
-  if (a === b) return 0;
-  if (Math.abs(a.length - b.length) > 1) return 99;
 
-  let i = 0;
-  let j = 0;
-  let edits = 0;
 
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      i++;
-      j++;
-      continue;
-    }
-
-    edits++;
-    if (edits > 1) return edits;
-
-    if (a.length > b.length) {
-      i++;
-    } else if (b.length > a.length) {
-      j++;
-    } else {
-      i++;
-      j++;
-    }
-  }
-
-  if (i < a.length || j < b.length) edits++;
-  return edits;
-}
-
-function tokenMatchesLoose(a: string, b: string) {
-  if (a === b) return true;
-  if (a.length < 4 || b.length < 4) return false;
-  return tokenDistance(a, b) <= 1;
-}
-
-function countLooseOverlap(source: string[], target: string[]) {
-  let overlap = 0;
-  const used = new Set<number>();
-
-  for (const s of source) {
-    const idx = target.findIndex((t, i) => !used.has(i) && tokenMatchesLoose(s, t));
-    if (idx !== -1) {
-      used.add(idx);
-      overlap++;
-    }
-  }
-
-  return overlap;
-}
 
 const STATUS_LABELS: Record<string, { remark: string; scheduleType: string; isOff: boolean }> = {
   PRESENT: { remark: 'Present', scheduleType: ' Regular', isOff: false },
@@ -374,9 +324,11 @@ export default function App() {
 
       // Some exports place the first date in col 0 and then leave blanks between days.
       // In that case, mapping by column index shifts dates by +1 day. Prefer sequential mapping.
-      const dayDates = sequentialHeaderDates.length >= 7
-        ? sequentialHeaderDates.slice(0, 7)
-        : dayDatesByColumn;
+      const dayDates = fixYearWrap(
+        sequentialHeaderDates.length >= 7
+          ? sequentialHeaderDates.slice(0, 7)
+          : dayDatesByColumn
+      );
 
       const hasHeaderDates = dayDates.some((d) => d !== null);
       if (!hasHeaderDates && !weekStart) {
@@ -423,6 +375,8 @@ export default function App() {
 
       const out: OutputRow[] = [];
       const unmatchedAttendance = new Set<string>();
+      const unknownStatuses = new Set<string>();
+      const outOnlyRows: string[] = [];
 
       for (let rowIdx = headerIdx + 1; rowIdx < scheduleData.length; rowIdx++) {
         const row = scheduleData[rowIdx];
@@ -454,10 +408,16 @@ export default function App() {
           const outStatus = normalizeStatus(outRaw);
           if (TERMINATION_STATUSES.has(inStatus) || TERMINATION_STATUSES.has(outStatus)) continue;
 
-          const statusRaw = normalizeStatus(inRaw || outRaw);
+          const firstCell = inRaw || outRaw;
+          const statusRaw = normalizeStatus(firstCell);
           const statusLabels = getStatusLabels(statusRaw);
           const statusOnlyCell = Boolean(statusLabels) && !isClockTime(inRaw);
-          const isOff = !inRaw || statusOnlyCell ? (statusLabels?.isOff ?? true) : false;
+          // Texto que no es hora ni un estado conocido (ej. "SICK"): no se debe tratar como "Present"
+          const unknownStatus = !statusLabels && !isClockTime(firstCell);
+          const isOff = unknownStatus ? true : (!inRaw || statusOnlyCell ? (statusLabels?.isOff ?? true) : false);
+
+          if (unknownStatus) unknownStatuses.add(firstCell);
+          if (!inRaw && isClockTime(outRaw)) outOnlyRows.push(`${fullName} (${days[day]})`);
 
           const schIn = isOff ? '00:00' : convertTime(inRaw);
           const schOut = isOff ? '00:00' : convertTime(outRaw);
@@ -484,8 +444,8 @@ export default function App() {
             Staffed: minutes,
             Scheduled: minutes,
             Paused: 0,
-            Remark: statusLabels?.remark ?? (isOff ? 'Rest Day' : 'Present'),
-            ScheduleType: statusLabels?.scheduleType ?? (isOff ? 'Rest Day' : ' Regular'),
+            Remark: unknownStatus ? 'Check status' : (statusLabels?.remark ?? (isOff ? 'Rest Day' : 'Present')),
+            ScheduleType: unknownStatus ? firstCell : (statusLabels?.scheduleType ?? (isOff ? 'Rest Day' : ' Regular')),
             WorkType: isOff ? '' : defaultWorkType,
             BreakLunchScheduledDisplay: '',
             BreakLunchStaffedDisplay: '',
@@ -500,12 +460,19 @@ export default function App() {
       }
 
       setOutputData(out);
+
+      const notes: string[] = [`Generado: ${out.length} filas.`];
       if (headcountDataStr.trim() && unmatchedAttendance.size > 0) {
         const sample = Array.from(unmatchedAttendance).slice(0, 8).join(', ');
-        alert(`Generado: ${out.length} filas. Ojo: ${unmatchedAttendance.size} Attendance no hizo match con headcount. Ejemplos: ${sample}`);
-        return;
+        notes.push(`Ojo: ${unmatchedAttendance.size} Attendance no hizo match con headcount. Ejemplos: ${sample}`);
       }
-      alert(`Generado: ${out.length} filas.`);
+      if (unknownStatuses.size > 0) {
+        notes.push(`Estados no reconocidos (quedaron como "Check status" en Remark): ${Array.from(unknownStatuses).slice(0, 8).join(', ')}`);
+      }
+      if (outOnlyRows.length > 0) {
+        notes.push(`${outOnlyRows.length} dia(s) con hora de salida pero sin entrada (quedaron como descanso). Ejemplos: ${outOnlyRows.slice(0, 5).join(', ')}`);
+      }
+      alert(notes.join('\n\n'));
     } catch (error: any) {
       console.error(error);
       alert(`Ocurrio un error: ${error.message}`);
@@ -521,7 +488,7 @@ export default function App() {
       ...outputData.map((row) =>
         headers
           .map((h) => {
-            let val = String((row as any)[h] || '');
+            let val = String((row as any)[h] ?? '');
             if (val.includes('\n') || val.includes('\t') || val.includes('"')) {
               val = `"${val.replace(/"/g, '""')}"`;
             }
@@ -531,8 +498,9 @@ export default function App() {
       ),
     ].join('\n');
 
-    navigator.clipboard.writeText(tsv);
-    alert('Copiado al portapapeles.');
+    navigator.clipboard.writeText(tsv)
+      .then(() => alert('Copiado al portapapeles.'))
+      .catch(() => alert('No se pudo copiar automaticamente. Usa Export CSV.'));
   };
 
   const handleExportCSV = () => {
@@ -544,7 +512,7 @@ export default function App() {
       ...outputData.map((row) =>
         headers
           .map((h) => {
-            let val = String((row as any)[h] || '');
+            let val = String((row as any)[h] ?? '');
             if (val.includes(',') || val.includes('\n') || val.includes('"')) {
               val = `"${val.replace(/"/g, '""')}"`;
             }
