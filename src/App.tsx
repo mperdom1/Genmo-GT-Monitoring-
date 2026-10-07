@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { ArrowRightLeft, ClipboardCopy, Download, FileSpreadsheet, Upload } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { ref, set } from 'firebase/database';
-import { db } from './firebase';
+import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
+import { storage } from './firebase';
+import { fetchGoogleSheetData, listGoogleSheetWeeks, saveGoogleSheetWeek, type GoogleSheetRow } from './googleSheets';
 import { buildHeadcountTSV, firstDateInRow, sheetToTSV } from './excel';
 
 type OutputRow = {
@@ -271,7 +272,10 @@ export default function App() {
   const [fileInfo, setFileInfo] = useState('');
   const [weekSheets, setWeekSheets] = useState<string[]>([]);
   const [selectedSheet, setSelectedSheet] = useState('');
-  const [firebaseStatus, setFirebaseStatus] = useState('');
+  const [integrationStatus, setIntegrationStatus] = useState('');
+  const [googleWeeks, setGoogleWeeks] = useState<string[]>([]);
+  const [selectedGoogleWeek, setSelectedGoogleWeek] = useState('');
+  const [reuseWeek, setReuseWeek] = useState('');
 
   const loadWeek = (wb: XLSX.WorkBook, sheetName: string) => {
     const ws = wb.Sheets[sheetName];
@@ -590,59 +594,133 @@ export default function App() {
     }
   };
 
-  const handleUploadToFirebase = async () => {
-    if (outputData.length === 0) {
-      alert('Primero transforma los datos.');
+  const handleUploadTemplate = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const fileRef = storageRef(storage, `templates/${file.name}`);
+      const snapshot = await uploadBytes(fileRef, file);
+      const url = await getDownloadURL(snapshot.ref);
+      setIntegrationStatus(`✓ Template guardado: ${file.name}`);
+      // The file is also loaded into the current transformer below.
+      console.info('Firebase template URL:', url);
+    } catch (error: any) {
+      console.error(error);
+      setIntegrationStatus('No se pudo guardar el template en Firebase');
+      alert(`No se pudo guardar el Excel en Firebase: ${error?.message || error}`);
+    }
+  };
+
+  const handleGoogleWeeks = async () => {
+    try {
+      setIntegrationStatus('Cargando semanas de Google Sheets...');
+      const weeks = await listGoogleSheetWeeks();
+      setGoogleWeeks(weeks);
+      setReuseWeek((current) => current || weeks[weeks.length - 1] || '');
+      setIntegrationStatus(`✓ ${weeks.length} semana(s) encontradas en Google Sheets`);
+    } catch (error: any) {
+      console.error(error);
+      setIntegrationStatus('No se pudo leer Google Sheets');
+      alert(`No se pudo leer Google Sheets: ${error?.message || error}`);
+    }
+  };
+
+  const handleReuseWeek = async () => {
+    if (!reuseWeek) {
+      alert('Selecciona una semana guardada.');
+      return;
+    }
+    if (!weekStartDate) {
+      alert('Selecciona primero la fecha de la nueva semana.');
       return;
     }
 
-    setFirebaseStatus('Subiendo a Firebase...');
-
     try {
-      const rawWeekKey = weekStartDate || selectedSheet || 'unknown-week';
-      const weekKey = rawWeekKey.replace(/[^a-zA-Z0-9_-]/g, '_');
+      setIntegrationStatus(`Cargando ${reuseWeek} y Usertimeline...`);
+      const [source, timeline] = await Promise.all([
+        fetchGoogleSheetData(reuseWeek),
+        fetchGoogleSheetData('Usertimeline'),
+      ]);
 
-      const scheduleRows: Record<string, OutputRow> = {};
-      outputData.forEach((row, index) => {
-        const rowKey = `${row.Date}_${row.VisualCode || 'unknown'}_${index}`;
-        scheduleRows[rowKey] = row;
-      });
+      const targetDate = new Date(`${weekStartDate}T00:00:00`);
+      const activeAgents = new Map<string, GoogleSheetRow>();
 
-      await set(ref(db, `scheduleExports/${weekKey}`), {
-        weekStartDate: weekStartDate || null,
-        sourceSheet: selectedSheet || null,
-        campaignName,
-        uploadedAt: new Date().toISOString(),
-        rowCount: outputData.length,
-        rows: scheduleRows,
-      });
+      for (const agent of timeline.rows) {
+        const site = String(agent.Site ?? '').trim().toUpperCase();
+        const role = String(agent.Role ?? '').trim().toLowerCase();
+        const startRaw = String(agent.Start ?? '').trim();
+        const endRaw = String(agent.Last_Day ?? agent.End ?? '').trim();
+        const startDate = startRaw ? new Date(startRaw) : null;
+        const endDate = endRaw ? new Date(endRaw) : null;
 
-      if (headcountDataStr.trim()) {
-        const rosterRows = parseTSV(headcountDataStr.trim());
-        if (rosterRows.length > 1) {
-          const headers = rosterRows[0];
-          const headcountRows = rosterRows.slice(1).map((row) => {
-            const item: Record<string, string> = {};
-            headers.forEach((header, index) => {
-              item[header] = row[index] ?? '';
-            });
-            return item;
-          });
+        if (site !== 'HN' || role !== 'agent') continue;
+        if (startDate && !Number.isNaN(startDate.getTime()) && startDate > targetDate) continue;
+        if (endDate && !Number.isNaN(endDate.getTime()) && endDate < targetDate) continue;
 
-          await set(ref(db, 'headcount'), {
-            updatedAt: new Date().toISOString(),
-            rowCount: headcountRows.length,
-            rows: headcountRows,
-          });
-        }
+        const key = String(agent['Emp ID'] ?? agent['Getty Username'] ?? agent['Full Name'] ?? '').trim().toLowerCase();
+        if (key) activeAgents.set(key, agent);
       }
 
-      setFirebaseStatus(`✓ Subido a Firebase: ${outputData.length} filas`);
-      alert('Los datos fueron subidos correctamente a Firebase.');
+      const filtered = source.rows.filter((row) => {
+        const status = String(row.Remark ?? row.Status ?? '').trim().toUpperCase();
+        const type = String(row.ScheduleType ?? '').trim().toUpperCase();
+        if (status.includes('TERM') || type.includes('TERM')) return false;
+        if (status === 'LEAVE' || type.includes('LEAVE') || type.includes('VACATION')) return false;
+
+        const keyCandidates = [
+          row['VisualCode'],
+          row['Emp ID'],
+          row['Getty Username'],
+          row['EmployeeName'],
+          row['Full Name'],
+        ].map((v) => String(v ?? '').trim().toLowerCase()).filter(Boolean);
+
+        return keyCandidates.some((key) => activeAgents.has(key));
+      });
+
+      // Shift the reused week by 7 days while preserving the schedule/time assigned to each agent.
+      const shifted = filtered.map((row) => {
+        const copy: GoogleSheetRow = { ...row };
+        const rawDate = String(copy.Date ?? '');
+        const oldDate = new Date(rawDate);
+        if (!Number.isNaN(oldDate.getTime())) {
+          const shiftedDate = new Date(oldDate);
+          shiftedDate.setDate(shiftedDate.getDate() + 7);
+          copy.Date = formatDate(shiftedDate);
+        } else {
+          copy.Date = weekStartDate;
+        }
+        return copy;
+      });
+
+      setOutputData(shifted as OutputRow[]);
+      setIntegrationStatus(`✓ Reutilizada ${reuseWeek}: ${shifted.length} filas limpias para ${weekStartDate}`);
     } catch (error: any) {
       console.error(error);
-      setFirebaseStatus('Error al subir a Firebase');
-      alert(`No se pudo subir a Firebase: ${error?.message || error}`);
+      setIntegrationStatus('No se pudo reutilizar la semana');
+      alert(`No se pudo reutilizar la semana: ${error?.message || error}`);
+    }
+  };
+
+  const handleSaveWeekToGoogle = async () => {
+    if (outputData.length === 0) {
+      alert('Primero genera o reutiliza un schedule.');
+      return;
+    }
+    if (!weekStartDate) {
+      alert('Selecciona Week Start Date.');
+      return;
+    }
+
+    try {
+      setIntegrationStatus('Guardando semana en Google Sheets...');
+      const weekName = formatDate(new Date(`${weekStartDate}T00:00:00`));
+      await saveGoogleSheetWeek(weekName, outputData as unknown as GoogleSheetRow[]);
+      setIntegrationStatus(`✓ Semana ${weekName} guardada en Google Sheets`);
+      await handleGoogleWeeks();
+    } catch (error: any) {
+      console.error(error);
+      setIntegrationStatus('No se pudo guardar la semana en Google Sheets');
+      alert(`No se pudo guardar la semana: ${error?.message || error}`);
     }
   };
 
@@ -712,13 +790,13 @@ export default function App() {
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-3">
           <label className="flex items-center space-x-2 text-sm font-medium text-slate-700">
             <Upload size={18} className="text-indigo-500" />
-            <span>Opcion rapida: subir el Excel (Genmobile GT Schedules)</span>
+            <span>Subir Excel original / nuevo schedule</span>
           </label>
           <input
             type="file"
             accept=".xlsx,.xls"
             className="block w-full text-sm text-slate-600 file:mr-3 file:px-4 file:py-2 file:rounded-lg file:border-0 file:bg-indigo-50 file:text-indigo-700 file:font-medium hover:file:bg-indigo-100"
-            onChange={(e) => handleFile(e.target.files?.[0])}
+            onChange={(e) => { const file = e.target.files?.[0]; handleFile(file); handleUploadTemplate(file); }}
           />
           {fileInfo && <p className="text-xs text-slate-500">{fileInfo}</p>}
           {weekSheets.length > 0 && workbook && (
@@ -737,7 +815,43 @@ export default function App() {
               </select>
             </div>
           )}
-          <p className="text-xs text-slate-400">Al elegir la semana se llenan las Cajas 1 y 2 solas. Tambien puedes pegar a mano como antes.</p>
+          <p className="text-xs text-slate-400">El Excel es opcional: si ya tienes una semana guardada, puedes reutilizarla desde Google Sheets.</p>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="font-medium text-slate-800">Semanas guardadas</h2>
+              <p className="text-xs text-slate-500">Puedes reutilizar una semana anterior sin volver a subir el Excel.</p>
+            </div>
+            <button
+              onClick={handleGoogleWeeks}
+              className="px-4 py-2 bg-slate-100 border border-slate-300 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium"
+            >
+              Cargar semanas
+            </button>
+          </div>
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="flex flex-col space-y-1 min-w-[260px]">
+              <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Semana a reutilizar</label>
+              <select
+                className="px-3 py-2 border border-slate-300 rounded-lg outline-none"
+                value={reuseWeek}
+                onChange={(e) => setReuseWeek(e.target.value)}
+              >
+                <option value="">Selecciona una semana</option>
+                {googleWeeks.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </div>
+            <button
+              onClick={handleReuseWeek}
+              disabled={!reuseWeek}
+              className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-medium rounded-lg"
+            >
+              Reutilizar semana
+            </button>
+          </div>
+          <p className="text-xs text-slate-400">Al reutilizar: se excluyen Agent Term y Leave, se validan los agentes GT desde Usertimeline y se mueve el schedule a la nueva semana.</p>
         </div>
 
         <div className="grid grid-cols-1 gap-6">
@@ -821,7 +935,7 @@ export default function App() {
                 <FileSpreadsheet size={18} className="text-slate-500" />
                 <span>Generated Output ({outputData.length} rows)</span>
               </h2>
-              {firebaseStatus && <span className="text-xs text-slate-500">{firebaseStatus}</span>}
+              {integrationStatus && <span className="text-xs text-slate-500">{integrationStatus}</span>}
               <div className="flex items-center space-x-2">
                 <button
                   onClick={handleCopy}
@@ -838,11 +952,11 @@ export default function App() {
                   <span>Export CSV</span>
                 </button>
                 <button
-                  onClick={handleUploadToFirebase}
+                  onClick={handleSaveWeekToGoogle}
                   className="px-4 py-2 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 font-medium rounded-lg shadow-sm transition-colors flex items-center space-x-2 text-sm"
                 >
                   <Upload size={16} />
-                  <span>Upload to Firebase</span>
+                  <span>Guardar semana</span>
                 </button>
               </div>
             </div>
