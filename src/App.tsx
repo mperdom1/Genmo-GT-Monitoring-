@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { ArrowRightLeft, ClipboardCopy, Download, FileSpreadsheet } from 'lucide-react';
+import { ArrowRightLeft, ClipboardCopy, Download, FileSpreadsheet, Upload } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { buildHeadcountTSV, firstDateInRow, sheetToTSV } from './excel';
 
 type OutputRow = {
   VisualCode: string;
@@ -72,6 +74,19 @@ function parseHeaderDateToken(token: string, fallbackYear: number) {
   if (month === undefined) return null;
 
   return new Date(fallbackYear, month, day);
+}
+
+// Las fechas del encabezado vienen sin año (ej. 31-Dec, 1-Jan). Si el mes baja de un día al
+// siguiente, la semana cruzó de año y el resto de fechas pertenece al año siguiente.
+function fixYearWrap(dates: (Date | null)[]) {
+  let yearOffset = 0;
+  let prevMonth = -1;
+  return dates.map((d) => {
+    if (!d) return null;
+    if (prevMonth !== -1 && d.getMonth() < prevMonth) yearOffset++;
+    prevMonth = d.getMonth();
+    return new Date(d.getFullYear() + yearOffset, d.getMonth(), d.getDate());
+  });
 }
 
 function normalizeName(name: string) {
@@ -184,77 +199,14 @@ function toEmployeeName(name: string) {
   return parts[0] || '';
 }
 
-function tokenizeName(name: string) {
-  const stopwords = new Set(['de', 'del', 'la', 'las', 'los', 'y', 'da', 'do']);
-  return normalizeName(name)
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(' ')
-    .map((t) => t.trim())
-    .filter((t) => t && !stopwords.has(t));
-}
 
 function normalizeHeader(header: string) {
   return (header || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-function firstLastKey(tokens: string[]) {
-  if (!tokens.length) return '';
-  if (tokens.length === 1) return tokens[0];
-  return `${tokens[0]} ${tokens[tokens.length - 1]}`;
-}
 
-function tokenDistance(a: string, b: string) {
-  if (a === b) return 0;
-  if (Math.abs(a.length - b.length) > 1) return 99;
 
-  let i = 0;
-  let j = 0;
-  let edits = 0;
 
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      i++;
-      j++;
-      continue;
-    }
-
-    edits++;
-    if (edits > 1) return edits;
-
-    if (a.length > b.length) {
-      i++;
-    } else if (b.length > a.length) {
-      j++;
-    } else {
-      i++;
-      j++;
-    }
-  }
-
-  if (i < a.length || j < b.length) edits++;
-  return edits;
-}
-
-function tokenMatchesLoose(a: string, b: string) {
-  if (a === b) return true;
-  if (a.length < 4 || b.length < 4) return false;
-  return tokenDistance(a, b) <= 1;
-}
-
-function countLooseOverlap(source: string[], target: string[]) {
-  let overlap = 0;
-  const used = new Set<number>();
-
-  for (const s of source) {
-    const idx = target.findIndex((t, i) => !used.has(i) && tokenMatchesLoose(s, t));
-    if (idx !== -1) {
-      used.add(idx);
-      overlap++;
-    }
-  }
-
-  return overlap;
-}
 
 const STATUS_LABELS: Record<string, { remark: string; scheduleType: string; isOff: boolean }> = {
   PRESENT: { remark: 'Present', scheduleType: ' Regular', isOff: false },
@@ -278,6 +230,9 @@ const STATUS_LABELS: Record<string, { remark: string; scheduleType: string; isOf
   'MED LEAVE': { remark: 'Leave', scheduleType: 'Extended Medical Leave', isOff: true },
   'MEDICAL LEAVE': { remark: 'Leave', scheduleType: 'Extended Medical Leave', isOff: true },
   EML: { remark: 'Leave', scheduleType: 'Extended Medical Leave', isOff: true },
+  MLEAVE: { remark: 'Leave', scheduleType: 'Extended Medical Leave', isOff: true },
+  LEAVE: { remark: 'Leave', scheduleType: 'Leave of Absence', isOff: true },
+  'EXTENDED LEAVE': { remark: 'Leave', scheduleType: 'Leave of Absence', isOff: true },
   LOA: { remark: 'Leave', scheduleType: 'Leave of Absence', isOff: true },
   'LEAVE OF ABSENCE': { remark: 'Leave', scheduleType: 'Leave of Absence', isOff: true },
   HOLIDAY: { remark: 'Leave', scheduleType: 'Holiday', isOff: true },
@@ -310,6 +265,56 @@ export default function App() {
   const [defaultWorkType, setDefaultWorkType] = useState('WFH');
   const [defaultTeam, setDefaultTeam] = useState('GT-Gen Mobile -01');
   const [outputData, setOutputData] = useState<OutputRow[]>([]);
+  const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
+  const [fileInfo, setFileInfo] = useState('');
+  const [weekSheets, setWeekSheets] = useState<string[]>([]);
+  const [selectedSheet, setSelectedSheet] = useState('');
+
+  const loadWeek = (wb: XLSX.WorkBook, sheetName: string) => {
+    const ws = wb.Sheets[sheetName];
+    if (!ws) return;
+    setSelectedSheet(sheetName);
+    setScheduleDataStr(sheetToTSV(ws));
+    setOutputData([]);
+    const firstDate = firstDateInRow(ws, 0);
+    if (firstDate) setWeekStartDate(firstDate);
+  };
+
+  const handleFile = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array', cellNF: true });
+      const userTimelineName = wb.SheetNames.find((n) => n.trim().toLowerCase() === 'usertimeline');
+      const weeks = wb.SheetNames.filter((n) => n !== userTimelineName);
+
+      if (weeks.length === 0) {
+        alert('El archivo no tiene hojas de horarios semanales.');
+        return;
+      }
+
+      let info = `${file.name}: ${weeks.length} semana(s)`;
+      if (userTimelineName) {
+        const hc = buildHeadcountTSV(wb.Sheets[userTimelineName]);
+        if (hc.count > 0) {
+          setHeadcountDataStr(hc.tsv);
+          info += `, headcount de la hoja ${userTimelineName} (${hc.count} filas)`;
+        } else {
+          info += `, pero no pude leer el headcount de ${userTimelineName} (revisa Emp ID, Full Name, Short Name, Extension)`;
+        }
+      } else {
+        info += ', sin hoja Usertimeline (pega el headcount en la Caja 2 si lo necesitas)';
+      }
+
+      setWorkbook(wb);
+      setWeekSheets(weeks);
+      setFileInfo(info);
+      loadWeek(wb, weeks[weeks.length - 1]);
+    } catch (error: any) {
+      console.error(error);
+      alert(`No pude leer el archivo: ${error.message}`);
+    }
+  };
 
   const handleGenerate = () => {
     try {
@@ -374,9 +379,11 @@ export default function App() {
 
       // Some exports place the first date in col 0 and then leave blanks between days.
       // In that case, mapping by column index shifts dates by +1 day. Prefer sequential mapping.
-      const dayDates = sequentialHeaderDates.length >= 7
-        ? sequentialHeaderDates.slice(0, 7)
-        : dayDatesByColumn;
+      const dayDates = fixYearWrap(
+        sequentialHeaderDates.length >= 7
+          ? sequentialHeaderDates.slice(0, 7)
+          : dayDatesByColumn
+      );
 
       const hasHeaderDates = dayDates.some((d) => d !== null);
       if (!hasHeaderDates && !weekStart) {
@@ -385,7 +392,10 @@ export default function App() {
       }
 
       const rosterRows = headcountDataStr.trim() ? parseTSV(headcountDataStr.trim()) : [];
-      const rosterByExtension: Record<string, { empId: string; shortName: string }> = {};
+      type RosterEntry = { empId: string; shortName: string; fullName: string; extension: string };
+      // Una extension puede tener varias personas en el historial (ej. 5199), por eso es una lista.
+      const rosterByExtension: Record<string, RosterEntry[]> = {};
+      const rosterByName: Record<string, RosterEntry[]> = {};
 
       if (rosterRows.length > 0) {
         let rHeaderIdx = rosterRows.findIndex((row) =>
@@ -416,13 +426,45 @@ export default function App() {
           const extension = String(row[extensionIdx] || '').trim().replace(/\D/g, '');
 
           if (extension && (empId || fullName || shortName)) {
-            rosterByExtension[extension] = { empId, shortName };
+            const entry: RosterEntry = { empId, shortName, fullName, extension };
+            const list = (rosterByExtension[extension] ||= []);
+            // La misma persona en varias filas del historial: gana la ultima fila.
+            const sameIdx = empId ? list.findIndex((e) => e.empId === empId) : -1;
+            if (sameIdx >= 0) list.splice(sameIdx, 1);
+            list.push(entry);
+
+            const nameKey = normalizeName(fullName);
+            if (nameKey) (rosterByName[nameKey] ||= []).push(entry);
           }
         }
       }
 
       const out: OutputRow[] = [];
       const unmatchedAttendance = new Set<string>();
+      const unknownStatuses = new Set<string>();
+      const outOnlyRows: string[] = [];
+      const noIdRows = new Set<string>();
+      const idFromName = new Set<string>();
+      const sharedExtensions = new Set<string>();
+
+      const pickRoster = (extension: string, fullName: string): RosterEntry | undefined => {
+        const candidates = rosterByExtension[extension] || [];
+        if (candidates.length <= 1) return candidates[0];
+
+        const target = normalizeName(fullName).split(' ').filter(Boolean);
+        let best = candidates[candidates.length - 1];
+        let bestScore = -1;
+        candidates.forEach((c) => {
+          const tokens = normalizeName(c.fullName || c.shortName).split(' ').filter(Boolean);
+          const score = target.filter((t) => tokens.includes(t)).length;
+          if (score >= bestScore) {
+            best = c;
+            bestScore = score;
+          }
+        });
+        if (new Set(candidates.map((c) => c.empId)).size > 1) sharedExtensions.add(extension);
+        return best;
+      };
 
       for (let rowIdx = headerIdx + 1; rowIdx < scheduleData.length; rowIdx++) {
         const row = scheduleData[rowIdx];
@@ -430,10 +472,21 @@ export default function App() {
 
         const attendanceId = (row[attendanceIdIdx] || '').trim();
         const fullName = (row[nameIdx] || '').trim();
-        if (!attendanceId) continue;
+        if (!attendanceId && !fullName) continue;
 
-        const extension = parseVisualCode(attendanceId);
-        const rosterMatch = rosterByExtension[extension];
+        let extension = parseVisualCode(attendanceId);
+        if (!attendanceId) {
+          // Fila con nombre pero sin Attendance ID: se intenta ubicar por nombre en el headcount.
+          const byName = rosterByName[normalizeName(fullName)];
+          if (byName && byName.length > 0) {
+            extension = byName[byName.length - 1].extension;
+            idFromName.add(fullName);
+          } else {
+            noIdRows.add(fullName);
+            continue;
+          }
+        }
+        const rosterMatch = pickRoster(extension, fullName);
 
         if (headcountDataStr.trim() && !rosterMatch) {
           unmatchedAttendance.add(attendanceId || fullName);
@@ -454,10 +507,16 @@ export default function App() {
           const outStatus = normalizeStatus(outRaw);
           if (TERMINATION_STATUSES.has(inStatus) || TERMINATION_STATUSES.has(outStatus)) continue;
 
-          const statusRaw = normalizeStatus(inRaw || outRaw);
+          const firstCell = inRaw || outRaw;
+          const statusRaw = normalizeStatus(firstCell);
           const statusLabels = getStatusLabels(statusRaw);
           const statusOnlyCell = Boolean(statusLabels) && !isClockTime(inRaw);
-          const isOff = !inRaw || statusOnlyCell ? (statusLabels?.isOff ?? true) : false;
+          // Texto que no es hora ni un estado conocido (ej. "SICK"): no se debe tratar como "Present"
+          const unknownStatus = !statusLabels && !isClockTime(firstCell);
+          const isOff = unknownStatus ? true : (!inRaw || statusOnlyCell ? (statusLabels?.isOff ?? true) : false);
+
+          if (unknownStatus) unknownStatuses.add(firstCell);
+          if (!inRaw && isClockTime(outRaw)) outOnlyRows.push(`${fullName} (${days[day]})`);
 
           const schIn = isOff ? '00:00' : convertTime(inRaw);
           const schOut = isOff ? '00:00' : convertTime(outRaw);
@@ -484,8 +543,8 @@ export default function App() {
             Staffed: minutes,
             Scheduled: minutes,
             Paused: 0,
-            Remark: statusLabels?.remark ?? (isOff ? 'Rest Day' : 'Present'),
-            ScheduleType: statusLabels?.scheduleType ?? (isOff ? 'Rest Day' : ' Regular'),
+            Remark: unknownStatus ? 'Check status' : (statusLabels?.remark ?? (isOff ? 'Rest Day' : 'Present')),
+            ScheduleType: unknownStatus ? firstCell : (statusLabels?.scheduleType ?? (isOff ? 'Rest Day' : ' Regular')),
             WorkType: isOff ? '' : defaultWorkType,
             BreakLunchScheduledDisplay: '',
             BreakLunchStaffedDisplay: '',
@@ -500,12 +559,28 @@ export default function App() {
       }
 
       setOutputData(out);
+
+      const notes: string[] = [`Generado: ${out.length} filas.`];
       if (headcountDataStr.trim() && unmatchedAttendance.size > 0) {
         const sample = Array.from(unmatchedAttendance).slice(0, 8).join(', ');
-        alert(`Generado: ${out.length} filas. Ojo: ${unmatchedAttendance.size} Attendance no hizo match con headcount. Ejemplos: ${sample}`);
-        return;
+        notes.push(`Ojo: ${unmatchedAttendance.size} Attendance no hizo match con headcount. Ejemplos: ${sample}`);
       }
-      alert(`Generado: ${out.length} filas.`);
+      if (noIdRows.size > 0) {
+        notes.push(`${noIdRows.size} agente(s) sin Attendance ID y sin match por nombre: NO se incluyeron: ${Array.from(noIdRows).slice(0, 8).join(', ')}`);
+      }
+      if (idFromName.size > 0) {
+        notes.push(`${idFromName.size} agente(s) sin Attendance ID se ubicaron por nombre en el headcount: ${Array.from(idFromName).slice(0, 8).join(', ')}`);
+      }
+      if (sharedExtensions.size > 0) {
+        notes.push(`Extension compartida por varias personas en el headcount (${Array.from(sharedExtensions).join(', ')}); elegi la persona por nombre. Revisa que sea la correcta.`);
+      }
+      if (unknownStatuses.size > 0) {
+        notes.push(`Estados no reconocidos (quedaron como "Check status" en Remark): ${Array.from(unknownStatuses).slice(0, 8).join(', ')}`);
+      }
+      if (outOnlyRows.length > 0) {
+        notes.push(`${outOnlyRows.length} dia(s) con hora de salida pero sin entrada (quedaron como descanso). Ejemplos: ${outOnlyRows.slice(0, 5).join(', ')}`);
+      }
+      alert(notes.join('\n\n'));
     } catch (error: any) {
       console.error(error);
       alert(`Ocurrio un error: ${error.message}`);
@@ -521,7 +596,7 @@ export default function App() {
       ...outputData.map((row) =>
         headers
           .map((h) => {
-            let val = String((row as any)[h] || '');
+            let val = String((row as any)[h] ?? '');
             if (val.includes('\n') || val.includes('\t') || val.includes('"')) {
               val = `"${val.replace(/"/g, '""')}"`;
             }
@@ -531,8 +606,9 @@ export default function App() {
       ),
     ].join('\n');
 
-    navigator.clipboard.writeText(tsv);
-    alert('Copiado al portapapeles.');
+    navigator.clipboard.writeText(tsv)
+      .then(() => alert('Copiado al portapapeles.'))
+      .catch(() => alert('No se pudo copiar automaticamente. Usa Export CSV.'));
   };
 
   const handleExportCSV = () => {
@@ -544,7 +620,7 @@ export default function App() {
       ...outputData.map((row) =>
         headers
           .map((h) => {
-            let val = String((row as any)[h] || '');
+            let val = String((row as any)[h] ?? '');
             if (val.includes(',') || val.includes('\n') || val.includes('"')) {
               val = `"${val.replace(/"/g, '""')}"`;
             }
@@ -573,6 +649,37 @@ export default function App() {
           </div>
           <h1 className="text-2xl font-semibold text-slate-800">Schedule Transformer</h1>
         </header>
+
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-3">
+          <label className="flex items-center space-x-2 text-sm font-medium text-slate-700">
+            <Upload size={18} className="text-indigo-500" />
+            <span>Opcion rapida: subir el Excel (Genmobile GT Schedules)</span>
+          </label>
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            className="block w-full text-sm text-slate-600 file:mr-3 file:px-4 file:py-2 file:rounded-lg file:border-0 file:bg-indigo-50 file:text-indigo-700 file:font-medium hover:file:bg-indigo-100"
+            onChange={(e) => handleFile(e.target.files?.[0])}
+          />
+          {fileInfo && <p className="text-xs text-slate-500">{fileInfo}</p>}
+          {weekSheets.length > 0 && workbook && (
+            <div className="flex flex-col space-y-1 max-w-sm">
+              <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Semana (hoja)</label>
+              <select
+                className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                value={selectedSheet}
+                onChange={(e) => loadWeek(workbook, e.target.value)}
+              >
+                {weekSheets.map((name) => (
+                  <option key={name} value={name}>
+                    {name.trim()}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <p className="text-xs text-slate-400">Al elegir la semana se llenan las Cajas 1 y 2 solas. Tambien puedes pegar a mano como antes.</p>
+        </div>
 
         <div className="grid grid-cols-1 gap-6">
           <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col">
