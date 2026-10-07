@@ -1,35 +1,27 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Genmo GT Monitoring
 
-# Run and deploy your AI Studio app
+Schedule Transformer for Gen Mobile GT schedules.
 
-This contains everything you need to run your app locally.
+## Current workflow
 
-View your app in AI Studio: https://ai.studio/apps/9d65ffb0-b22c-4775-a76c-f412022e050a
+- Upload a new Excel schedule when you have one.
+- The original Excel is stored as a template in Firebase Storage.
+- Saved weekly schedules are written to the configured Google Sheet.
+- The Google Sheet `Usertimeline` is the source for the GT agent roster.
+- Reusing a saved week filters to GT agents valid for the new week and removes termination/leave rows before shifting the schedule to the new week.
 
-## Run Locally
+## Google Sheets connection
 
-**Prerequisites:**  Node.js
+The app uses a Google Apps Script Web App as the bridge to the Google Sheet.
 
+1. Open the target Google Sheet.
+2. Go to **Extensions → Apps Script**.
+3. Copy `google-apps-script/Code.gs` from this repository into the Apps Script project.
+4. Deploy it as a **Web app**.
+5. Set the deployment to execute as the spreadsheet owner.
+6. Copy the Web App URL.
+7. Configure that URL as `VITE_GOOGLE_SHEETS_API_URL` when building the app.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+The Apps Script reads the `Usertimeline` tab and can create/update weekly tabs such as `10-12-2026`.
 
-## Build and Preview
-
-1. Build production output:
-   `npm run build`
-2. Preview the built site locally:
-   `npm run preview`
-
-## Deploy to GitHub Pages
-
-1. Ensure the repository is set up on GitHub.
-2. Run:
-   `npm run deploy`
-3. Your app will be published at:
-   `https://mperdom1.github.io/Genmo-GT-Monitoring-/`
+> The Google Apps Script deployment is intentionally not committed with an access token or secret.
