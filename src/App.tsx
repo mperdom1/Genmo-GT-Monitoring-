@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { ArrowRightLeft, ClipboardCopy, Download, FileSpreadsheet, Upload } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { ref, set } from 'firebase/database';
+import { db } from './firebase';
 import { buildHeadcountTSV, firstDateInRow, sheetToTSV } from './excel';
 
 type OutputRow = {
@@ -269,6 +271,7 @@ export default function App() {
   const [fileInfo, setFileInfo] = useState('');
   const [weekSheets, setWeekSheets] = useState<string[]>([]);
   const [selectedSheet, setSelectedSheet] = useState('');
+  const [firebaseStatus, setFirebaseStatus] = useState('');
 
   const loadWeek = (wb: XLSX.WorkBook, sheetName: string) => {
     const ws = wb.Sheets[sheetName];
@@ -587,6 +590,62 @@ export default function App() {
     }
   };
 
+  const handleUploadToFirebase = async () => {
+    if (outputData.length === 0) {
+      alert('Primero transforma los datos.');
+      return;
+    }
+
+    setFirebaseStatus('Subiendo a Firebase...');
+
+    try {
+      const rawWeekKey = weekStartDate || selectedSheet || 'unknown-week';
+      const weekKey = rawWeekKey.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+      const scheduleRows: Record<string, OutputRow> = {};
+      outputData.forEach((row, index) => {
+        const rowKey = `${row.Date}_${row.VisualCode || 'unknown'}_${index}`;
+        scheduleRows[rowKey] = row;
+      });
+
+      await set(ref(db, `scheduleExports/${weekKey}`), {
+        weekStartDate: weekStartDate || null,
+        sourceSheet: selectedSheet || null,
+        campaignName,
+        uploadedAt: new Date().toISOString(),
+        rowCount: outputData.length,
+        rows: scheduleRows,
+      });
+
+      if (headcountDataStr.trim()) {
+        const rosterRows = parseTSV(headcountDataStr.trim());
+        if (rosterRows.length > 1) {
+          const headers = rosterRows[0];
+          const headcountRows = rosterRows.slice(1).map((row) => {
+            const item: Record<string, string> = {};
+            headers.forEach((header, index) => {
+              item[header] = row[index] ?? '';
+            });
+            return item;
+          });
+
+          await set(ref(db, 'headcount'), {
+            updatedAt: new Date().toISOString(),
+            rowCount: headcountRows.length,
+            rows: headcountRows,
+          });
+        }
+      }
+
+      setFirebaseStatus(`✓ Subido a Firebase: ${outputData.length} filas`);
+      alert('Los datos fueron subidos correctamente a Firebase.');
+    } catch (error: any) {
+      console.error(error);
+      setFirebaseStatus('Error al subir a Firebase');
+      alert(`No se pudo subir a Firebase: ${error?.message || error}`);
+    }
+  };
+
   const handleCopy = () => {
     if (outputData.length === 0) return;
 
@@ -762,6 +821,7 @@ export default function App() {
                 <FileSpreadsheet size={18} className="text-slate-500" />
                 <span>Generated Output ({outputData.length} rows)</span>
               </h2>
+              {firebaseStatus && <span className="text-xs text-slate-500">{firebaseStatus}</span>}
               <div className="flex items-center space-x-2">
                 <button
                   onClick={handleCopy}
@@ -776,6 +836,13 @@ export default function App() {
                 >
                   <Download size={16} />
                   <span>Export CSV</span>
+                </button>
+                <button
+                  onClick={handleUploadToFirebase}
+                  className="px-4 py-2 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 font-medium rounded-lg shadow-sm transition-colors flex items-center space-x-2 text-sm"
+                >
+                  <Upload size={16} />
+                  <span>Upload to Firebase</span>
                 </button>
               </div>
             </div>
