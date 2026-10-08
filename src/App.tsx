@@ -1231,10 +1231,11 @@ export default function App() {
               <select
                 className="px-3 py-2 border border-slate-300 rounded-lg outline-none"
                 value={reuseWeek}
-                >
-                  <option value="">Selecciona una semana</option>
-                  {googleWeeks.map((name) => <option key={name} value={name}>{name}</option>)}
-                </select>
+                onChange={(e) => setReuseWeek(e.target.value)}
+              >
+                <option value="">Selecciona una semana</option>
+                {googleWeeks.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
               <button
                 onClick={handleReuseWeek}
                 disabled={!reuseWeek}
