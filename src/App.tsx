@@ -1010,3 +1010,116 @@ export default function App() {
               <select
                 className="px-3 py-2 border border-slate-300 rounded-lg outline-none"
                 value={reuseWeek}
+                >
+                  <option value="">Selecciona una semana</option>
+                  {googleWeeks.map((name) => <option key={name} value={name}>{name}</option>)}
+                </select>
+              <button
+                onClick={handleReuseWeek}
+                disabled={!reuseWeek}
+                className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-medium rounded-lg"
+              >
+                Reutilizar semana
+              </button>
+            </div>
+            <button
+              onClick={handleSaveWeekToGoogle}
+              disabled={outputData.length === 0}
+              className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-medium rounded-lg"
+            >
+              Guardar semana en Google Sheets
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex flex-wrap items-end gap-4">
+          <div className="flex flex-col space-y-1">
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Week Start Date (Monday)</label>
+            <input
+              type="date"
+              className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+              value={weekStartDate}
+              onChange={(e) => setWeekStartDate(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col space-y-1">
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Campaign Name</label>
+            <input
+              type="text"
+              className="px-3 py-2 border border-slate-300 rounded-lg outline-none"
+              value={campaignName}
+              onChange={(e) => setCampaignName(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col space-y-1">
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Default Team</label>
+            <input
+              type="text"
+              className="px-3 py-2 border border-slate-300 rounded-lg outline-none"
+              value={defaultTeam}
+              onChange={(e) => setDefaultTeam(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col space-y-1">
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Default Work Type</label>
+            <input
+              type="text"
+              className="px-3 py-2 border border-slate-300 rounded-lg outline-none w-32"
+              value={defaultWorkType}
+              onChange={(e) => setDefaultWorkType(e.target.value)}
+            />
+          </div>
+          <button
+            onClick={handleGenerate}
+            className="ml-auto px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg"
+          >
+            <ArrowRightLeft size={18} className="inline mr-2" />
+            Transform Data
+          </button>
+        </div>
+
+        {outputData.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+              <h2 className="font-medium text-slate-800">Generated Output ({outputData.length} rows)</h2>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleCopy}
+                  className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-sm"
+                >
+                  <ClipboardCopy size={16} className="inline mr-2" />Copy TSV
+                </button>
+                <button
+                  onClick={handleExportCSV}
+                  className="px-4 py-2 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm"
+                >
+                  <Download size={16} className="inline mr-2" />Export CSV
+                </button>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left whitespace-nowrap">
+                <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
+                  <tr>
+                    {Object.keys(outputData[0]).map((key) => (
+                      <th key={key} className="px-4 py-3 font-medium tracking-wider">{key}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {outputData.slice(0, 100).map((row, i) => (
+                    <tr key={i}>
+                      {Object.values(row).map((val: any, j) => (
+                        <td key={j} className="px-4 py-2 text-slate-600">{val}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
