@@ -1045,7 +1045,7 @@ export default function App() {
             type="file"
             accept=".xlsx,.xls"
             className="block w-full text-sm text-slate-600 file:mr-3 file:px-4 file:py-2 file:rounded-lg file:border-0 file:bg-indigo-50 file:text-indigo-700 file:font-medium hover:file:bg-indigo-100"
-            onChange={(e) => { const file = e.target.files?.[0]; handleFile(file); handleUploadTemplate(file); }}
+            onChange={(e) => { const file = e.target.files?.[0]; handleFile(file); }}
           />
           {fileInfo && <p className="text-xs text-slate-500">{fileInfo}</p>}
           {weekSheets.length > 0 && workbook && (
