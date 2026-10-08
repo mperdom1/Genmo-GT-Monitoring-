@@ -488,9 +488,17 @@ export default function App() {
 
       const companionName = companionPrefix
         ? wb.SheetNames.find((name) => {
-            const mainSuffix = sheetName.replace(/^\s*(Voice|Chat)\b/i, '').trim().toLowerCase();
+            const normalizeWeekRange = (value: string) =>
+              value
+                .replace(/^\s*(Voice|Chat)\b/i, '')
+                .replace(/\s+/g, '')
+                .replace(/[–—]/g, '-')
+                .toLowerCase();
+
+            const mainSuffix = normalizeWeekRange(sheetName);
             const candidatePrefix = /^\s*(Voice|Chat)\b/i.exec(name)?.[1] || '';
-            const candidateSuffix = name.replace(/^\s*(Voice|Chat)\b/i, '').trim().toLowerCase();
+            const candidateSuffix = normalizeWeekRange(name);
+
             return candidatePrefix.toLowerCase() === companionPrefix.toLowerCase() &&
               candidateSuffix === mainSuffix;
           })
