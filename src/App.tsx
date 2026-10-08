@@ -240,6 +240,9 @@ const STATUS_LABELS: Record<string, { remark: string; scheduleType: string; isOf
   'LEAVE OF ABSENCE': { remark: 'Leave', scheduleType: 'Leave of Absence', isOff: true },
   HOLIDAY: { remark: 'Leave', scheduleType: 'Holiday', isOff: true },
   SUSPENSION: { remark: 'Leave', scheduleType: 'Suspension', isOff: true },
+  TERM: { remark: 'Term', scheduleType: 'Term', isOff: true },
+  TERMINATED: { remark: 'Term', scheduleType: 'Term', isOff: true },
+  TERMINATION: { remark: 'Term', scheduleType: 'Term', isOff: true },
 };
 
 const TERMINATION_STATUSES = new Set(['TERM', 'TERMINATED', 'TERMINATION']);
@@ -343,6 +346,7 @@ function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
 
   const rows: string[][] = [dateHeader, normalizedHeader];
   const pausesByIdDay: Record<string, string> = {};
+  const pauseMinutesByIdDay: Record<string, number> = {};
 
   for (let r = gmHeaderIdx + 1; r < scheduleData.length; r++) {
     const source = scheduleData[r];
@@ -369,15 +373,20 @@ function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
       ].filter(([, from, to]) => from || to);
 
       if (pauseParts.length) {
-        pausesByIdDay[`${rawId}|${dayIndex}`] = pauseParts
+        const key = `${rawId}|${dayIndex}`;
+        pausesByIdDay[key] = pauseParts
           .map(([label, from, to]) => `${label}: ${from || ''} - ${to || ''}`)
           .join(' | ');
+        pauseMinutesByIdDay[key] = pauseParts.reduce((total, [, from, to]) => {
+          if (!from || !to || !isClockTime(from) || !isClockTime(to)) return total;
+          return total + calculateMinutes(convertTime(from), convertTime(to));
+        }, 0);
       }
     }
     rows.push(row);
   }
 
-  return { rows, pausesByIdDay, weekStartDate: startDate };
+  return { rows, pausesByIdDay, pauseMinutesByIdDay, weekStartDate: startDate };
 }
 
 export default function App() {
@@ -477,10 +486,12 @@ export default function App() {
       }
 
       let gmPauseMap: Record<string, string> = {};
+      let gmPauseMinutesMap: Record<string, number> = {};
       const gmNormalized = normalizeGMInput(scheduleData, weekStartDate);
       if (gmNormalized) {
         scheduleData.splice(0, scheduleData.length, ...gmNormalized.rows);
         gmPauseMap = gmNormalized.pausesByIdDay;
+        gmPauseMinutesMap = gmNormalized.pauseMinutesByIdDay;
         if (!weekStartDate && gmNormalized.weekStartDate) setWeekStartDate(gmNormalized.weekStartDate);
       }
 
@@ -645,6 +656,7 @@ export default function App() {
 
         if (headcountDataStr.trim() && !rosterMatch) {
           unmatchedAttendance.add(attendanceId || fullName);
+          if (gmNormalized) continue;
         }
 
         const visualCode = rosterMatch?.empId || extension;
@@ -660,7 +672,7 @@ export default function App() {
 
           const inStatus = normalizeStatus(inRaw);
           const outStatus = normalizeStatus(outRaw);
-          if (TERMINATION_STATUSES.has(inStatus) || TERMINATION_STATUSES.has(outStatus)) continue;
+          if (!gmNormalized && (TERMINATION_STATUSES.has(inStatus) || TERMINATION_STATUSES.has(outStatus))) continue;
 
           const firstCell = inRaw || outRaw;
           const statusRaw = normalizeStatus(firstCell);
@@ -697,7 +709,7 @@ export default function App() {
             PnchOut: '',
             Staffed: minutes,
             Scheduled: minutes,
-            Paused: 0,
+            Paused: gmPauseMinutesMap[`${attendanceId}|${day}`] || 0,
             Remark: unknownStatus ? 'Check status' : (statusLabels?.remark ?? (isOff ? 'Rest Day' : 'Present')),
             ScheduleType: unknownStatus ? firstCell : (statusLabels?.scheduleType ?? (isOff ? 'Rest Day' : ' Regular')),
             WorkType: isOff ? '' : defaultWorkType,
@@ -997,149 +1009,3 @@ export default function App() {
               className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-medium rounded-lg"
             >
               Reutilizar semana
-            </button>
-          </div>
-          <p className="text-xs text-slate-400">Al reutilizar: se excluyen Agent Term y Leave, se validan los agentes GT desde Usertimeline y se mueve el schedule a la nueva semana.</p>
-        </div>
-
-        <div className="grid grid-cols-1 gap-6">
-          <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col">
-            <label className="flex items-center space-x-2 text-sm font-medium text-slate-700 mb-2">
-              <FileSpreadsheet size={18} className="text-indigo-500" />
-              <span>Caja 1: Horarios Semanales</span>
-            </label>
-            <textarea
-              className="flex-1 min-h-[260px] p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y font-mono whitespace-pre"
-              placeholder="GM-GT de Julio o tabla Getty con Mon IN/OUT ... Sun IN/OUT"
-              value={scheduleDataStr}
-              onChange={(e) => setScheduleDataStr(e.target.value)}
-            />
-          </div>
-
-          <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col">
-            <label className="flex items-center space-x-2 text-sm font-medium text-slate-700 mb-2">
-              <FileSpreadsheet size={18} className="text-indigo-500" />
-              <span>Caja 2 (opcional): Headcount (Emp ID, Full Name, Short Name, Extension)</span>
-            </label>
-            <textarea
-              className="flex-1 min-h-[180px] p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y font-mono whitespace-pre"
-              placeholder="Pega aqui el headcount para mapear VisualCode y EmployeeName"
-              value={headcountDataStr}
-              onChange={(e) => setHeadcountDataStr(e.target.value)}
-            />
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex flex-wrap items-end gap-4">
-          <div className="flex flex-col space-y-1">
-            <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Week Start Date (Monday)</label>
-            <input
-              type="date"
-              className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-              value={weekStartDate}
-              onChange={(e) => setWeekStartDate(e.target.value)}
-            />
-          </div>
-          <div className="flex flex-col space-y-1">
-            <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Campaign Name</label>
-            <input
-              type="text"
-              className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-              value={campaignName}
-              onChange={(e) => setCampaignName(e.target.value)}
-            />
-          </div>
-          <div className="flex flex-col space-y-1">
-            <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Default Team</label>
-            <input
-              type="text"
-              className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-              value={defaultTeam}
-              onChange={(e) => setDefaultTeam(e.target.value)}
-            />
-          </div>
-          <div className="flex flex-col space-y-1">
-            <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Default Work Type</label>
-            <input
-              type="text"
-              className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none w-32"
-              value={defaultWorkType}
-              onChange={(e) => setDefaultWorkType(e.target.value)}
-            />
-          </div>
-          <button
-            onClick={handleGenerate}
-            className="ml-auto px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-sm transition-colors flex items-center space-x-2"
-          >
-            <ArrowRightLeft size={18} />
-            <span>Transform Data</span>
-          </button>
-        </div>
-
-        {outputData.length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
-              <h2 className="font-medium text-slate-800 flex items-center space-x-2">
-                <FileSpreadsheet size={18} className="text-slate-500" />
-                <span>Generated Output ({outputData.length} rows)</span>
-              </h2>
-              {integrationStatus && <span className="text-xs text-slate-500">{integrationStatus}</span>}
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={handleCopy}
-                  className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-medium rounded-lg shadow-sm transition-colors flex items-center space-x-2 text-sm"
-                >
-                  <ClipboardCopy size={16} />
-                  <span>Copy TSV</span>
-                </button>
-                <button
-                  onClick={handleExportCSV}
-                  className="px-4 py-2 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 font-medium rounded-lg shadow-sm transition-colors flex items-center space-x-2 text-sm"
-                >
-                  <Download size={16} />
-                  <span>Export CSV</span>
-                </button>
-                <button
-                  onClick={handleSaveWeekToGoogle}
-                  className="px-4 py-2 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 font-medium rounded-lg shadow-sm transition-colors flex items-center space-x-2 text-sm"
-                >
-                  <Upload size={16} />
-                  <span>Guardar semana</span>
-                </button>
-              </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left whitespace-nowrap">
-                <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
-                  <tr>
-                    {Object.keys(outputData[0]).map((key) => (
-                      <th key={key} className="px-4 py-3 font-medium tracking-wider">
-                        {key}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {outputData.slice(0, 100).map((row, i) => (
-                    <tr key={i} className="hover:bg-slate-50/50">
-                      {Object.values(row).map((val: any, j) => (
-                        <td key={j} className="px-4 py-2 text-slate-600">
-                          {val}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {outputData.length > 100 && (
-                <div className="p-3 text-center text-sm text-slate-500 bg-slate-50 border-t border-slate-200">
-                  Showing first 100 rows. Export or copy to see all {outputData.length} rows.
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
