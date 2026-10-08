@@ -290,7 +290,7 @@ function normalizeGoogleDate(value: unknown) {
 function buildGoogleHeadcountTSV(rows: GoogleSheetRow[], weekDate: string) {
   const target = weekDate ? new Date(`${weekDate}T00:00:00`) : null;
   const validRows = rows.filter((row) => {
-    if (String(row.Site ?? '').trim().toUpperCase() !== 'HN') return false;
+    if (String(row.Site ?? '').trim().toUpperCase() !== 'GT') return false;
     if (String(row.Role ?? '').trim().toUpperCase() !== 'AGENT') return false;
     if (!target) return true;
     const start = normalizeGoogleDate(row.Start);
