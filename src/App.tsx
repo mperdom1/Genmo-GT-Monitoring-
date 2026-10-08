@@ -455,21 +455,28 @@ export default function App() {
     const selectedDate = firstDateInRow(ws, 0) || firstDateInRow(ws, 1) ||
       inferWeekStartFromRows(rows.slice(0, 5));
 
-    // Voice y Chat de la misma semana forman un solo schedule.
-    // Si existe la hoja compañera, las unimos antes de generar el archivo final.
     const isGM = rows.some((row) => {
       const upper = row.map((cell) => String(cell || '').toUpperCase().trim());
       return upper.includes('LOB') && upper.includes('GETTY NAME') && upper.includes('ID');
     });
 
     let combinedTsv = tsv;
+
     if (isGM) {
-      const prefix = /^\\s*(Voice|Chat)\\b/i.exec(sheetName)?.[1];
-      const companionPrefix = prefix ? (prefix.toLowerCase() === 'voice' ? 'Chat' : 'Voice') : '';
+      const prefixMatch = /^\s*(Voice|Chat)\b/i.exec(sheetName);
+      const prefix = prefixMatch?.[1] || '';
+      const companionPrefix = prefix
+        ? (prefix.toLowerCase() === 'voice' ? 'Chat' : 'Voice')
+        : '';
+
       const companionName = companionPrefix
-        ? wb.SheetNames.find((name) =>
-            name.toLowerCase() === sheetName.toLowerCase().replace(/^\\s*(Voice|Chat)\\b/i, companionPrefix)
-          )
+        ? wb.SheetNames.find((name) => {
+            const mainSuffix = sheetName.replace(/^\s*(Voice|Chat)\b/i, '').trim().toLowerCase();
+            const candidatePrefix = /^\s*(Voice|Chat)\b/i.exec(name)?.[1] || '';
+            const candidateSuffix = name.replace(/^\s*(Voice|Chat)\b/i, '').trim().toLowerCase();
+            return candidatePrefix.toLowerCase() === companionPrefix.toLowerCase() &&
+              candidateSuffix === mainSuffix;
+          })
         : undefined;
 
       if (companionName) {
@@ -478,8 +485,6 @@ export default function App() {
         const normalizedCompanion = normalizeGMInput(companionRows, selectedDate || '');
 
         if (normalizedMain && normalizedCompanion) {
-          // Voice + Chat: una sola fila semanal por Extension.
-          // Para cada día guardamos el mejor horario disponible.
           const weeklyByExtension = new Map<string, string[]>();
 
           const addRow = (candidate: string[]) => {
@@ -497,31 +502,29 @@ export default function App() {
             for (let day = 0; day < 7; day++) {
               const inIdx = 2 + day * 2;
               const outIdx = inIdx + 1;
-
               const candidateIn = String(candidate[inIdx] || '').trim();
               const candidateOut = String(candidate[outIdx] || '').trim();
               const currentIn = String(weekly[inIdx] || '').trim();
               const currentOut = String(weekly[outIdx] || '').trim();
 
-              const isOff = (v: string) => {
-                const x = v.toUpperCase();
-                return !v || x === 'OFF';
-              };
+              const candidateOff = !candidateIn || !candidateOut ||
+                (candidateIn.toUpperCase() === 'OFF' && candidateOut.toUpperCase() === 'OFF');
+              const currentOff = !currentIn || !currentOut ||
+                (currentIn.toUpperCase() === 'OFF' && currentOut.toUpperCase() === 'OFF');
 
-              const candidateHasSchedule = !isOff(candidateIn) || !isOff(candidateOut);
-              const currentHasSchedule = !isOff(currentIn) || !isOff(currentOut);
-
-              // Horario real > OFF/blanco.
-              if (candidateHasSchedule && !currentHasSchedule) {
-                weekly[inIdx] = candidate[inIdx];
-                weekly[outIdx] = candidate[outIdx];
-              } else if (!currentIn && !currentOut && (candidateIn || candidateOut)) {
-                weekly[inIdx] = candidate[inIdx];
-                weekly[outIdx] = candidate[outIdx];
+              if (candidateIn || candidateOut) {
+                if (currentOff && !candidateOff) {
+                  weekly[inIdx] = candidate[inIdx];
+                  weekly[outIdx] = candidate[outIdx];
+                } else if (!currentIn && !currentOut) {
+                  weekly[inIdx] = candidate[inIdx];
+                  weekly[outIdx] = candidate[outIdx];
+                }
               }
             }
           };
 
+          // Procesamos ambos archivos completos. Una sola fila semanal por Extension.
           normalizedMain.rows.slice(2).forEach(addRow);
           normalizedCompanion.rows.slice(2).forEach(addRow);
 
@@ -529,69 +532,39 @@ export default function App() {
             normalizedMain.rows[0],
             normalizedMain.rows[1],
             ...Array.from(weeklyByExtension.values()),
-          ].map((row) => row.join('\\t')).join('\\n');
+          ].map((row) => row.join('\t')).join('\n');
 
-          // Voice contiene los breaks y tiene prioridad sobre Chat.
+          // Voice tiene breaks; si la hoja seleccionada es Chat, igual buscamos los
+          // breaks de Voice porque ambas hojas representan la misma semana.
+          const mainIsVoice = /^\s*Voice\b/i.test(sheetName);
+          const voiceNormalized = mainIsVoice ? normalizedMain : normalizedCompanion;
+          const chatNormalized = mainIsVoice ? normalizedCompanion : normalizedMain;
+
           setLoadedGmPauseMap({
-            ...normalizedCompanion.pausesByIdDay,
-            ...normalizedMain.pausesByIdDay,
+            ...chatNormalized.pausesByIdDay,
+            ...voiceNormalized.pausesByIdDay,
           });
           setLoadedGmPauseMinutesMap({
-            ...normalizedCompanion.pauseMinutesByIdDay,
-            ...normalizedMain.pauseMinutesByIdDay,
-          });        }
-
-            for (let day = 0; day < 7; day++) {
-              const inIdx = 2 + day * 2;
-              const outIdx = inIdx + 1;
-              const currentIn = String(current[inIdx] || '').trim().toUpperCase();
-              const currentOut = String(current[outIdx] || '').trim().toUpperCase();
-              const candidateIn = String(candidate[inIdx] || '').trim().toUpperCase();
-              const candidateOut = String(candidate[outIdx] || '').trim().toUpperCase();
-
-              const currentOff = (!currentIn && !currentOut) || (currentIn === 'OFF' && currentOut === 'OFF');
-              const candidateOff = (!candidateIn && !candidateOut) || (candidateIn === 'OFF' && candidateOut === 'OFF');
-
-              if (currentOff && !candidateOff) {
-                current[inIdx] = candidate[inIdx];
-                current[outIdx] = candidate[outIdx];
-              }
-            }
-          };
-
-          // Voice primero: conserva sus horarios y sus breaks.
-          normalizedMain.rows.slice(2).forEach(addRow);
-          // Chat agrega agentes/días que Voice no tenga.
-          normalizedCompanion.rows.slice(2).forEach(addRow);
-
-          const mergedRows = [
-            normalizedMain.rows[0],
-            normalizedMain.rows[1],
-            ...Array.from(mergedByExtension.values()),
-          ];
-
-          combinedTsv = mergedRows.map((row) => row.join('\t')).join('\n');
-
-          // Los breaks siempre se identifican por Extension + día.
-          setLoadedGmPauseMap({
-            ...normalizedCompanion.pausesByIdDay,
-            ...normalizedMain.pausesByIdDay,
-          });
-          setLoadedGmPauseMinutesMap({
-            ...normalizedCompanion.pauseMinutesByIdDay,
-            ...normalizedMain.pauseMinutesByIdDay,
+            ...chatNormalized.pauseMinutesByIdDay,
+            ...voiceNormalized.pauseMinutesByIdDay,
           });
         }
+      }
+    }
 
-(sheetName);
+    setSelectedSheet(sheetName);
     setScheduleDataStr(combinedTsv);
     setOutputData([]);
+
     if (selectedDate) {
       setWeekStartDate(selectedDate);
       if (googleUserTimelineRows.length > 0) {
         const hc = buildGoogleHeadcountTSV(googleUserTimelineRows, selectedDate);
         setHeadcountDataStr(hc.tsv);
-        setFileInfo((current) => current.replace(/, Usertimeline cargada desde Google Sheets \\([^)]*\\)/, `, Usertimeline cargada desde Google Sheets (${hc.count} agentes GT/Agent válidos para la semana)`));
+        setFileInfo((current) => current.replace(
+          /, Usertimeline cargada desde Google Sheets \\([^)]*\\)/,
+          `, Usertimeline cargada desde Google Sheets (${hc.count} agentes GT/Agent válidos para la semana)`
+        ));
       }
     }
   };
