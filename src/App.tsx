@@ -6,6 +6,8 @@ import { storage } from './firebase';
 import { fetchGoogleSheetData, listGoogleSheetWeeks, saveGoogleSheetWeek, type GoogleSheetRow } from './googleSheets';
 import { buildHeadcountTSV, firstDateInRow, sheetToTSV } from './excel';
 
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 type OutputRow = {
   VisualCode: string;
   Campaign: string;
