@@ -294,11 +294,15 @@ function buildGoogleHeadcountTSV(rows: GoogleSheetRow[], weekDate: string) {
   const validRows = rows.filter((row) => {
     if (String(row.Site ?? '').trim().toUpperCase() !== 'GT') return false;
     if (String(row.Role ?? '').trim().toUpperCase() !== 'AGENT') return false;
+
+    // Si esta fila tiene Last_Day, esta fila no representa al agente activo.
+    // Si el mismo agente tiene otra fila con Last_Day en blanco, esa otra fila si puede ser valida.
+    const lastDayRaw = String(row.Last_Day ?? '').trim();
+    if (lastDayRaw) return false;
+
     if (!target) return true;
     const start = normalizeGoogleDate(row.Start);
-    const lastDay = normalizeGoogleDate(row.Last_Day ?? row.End);
     if (start && start > target) return false;
-    if (lastDay && lastDay < target) return false;
     return true;
   });
   const lines = validRows.map((row) => [
@@ -823,13 +827,15 @@ export default function App() {
         const site = String(agent.Site ?? '').trim().toUpperCase();
         const role = String(agent.Role ?? '').trim().toLowerCase();
         const startRaw = String(agent.Start ?? '').trim();
-        const endRaw = String(agent.Last_Day ?? agent.End ?? '').trim();
-        const startDate = startRaw ? new Date(startRaw) : null;
-        const endDate = endRaw ? new Date(endRaw) : null;
+        const lastDayRaw = String(agent.Last_Day ?? '').trim();
+        const startDate = startRaw ? normalizeGoogleDate(startRaw) : null;
 
         if (site !== 'GT' || role !== 'agent') continue;
-        if (startDate && !Number.isNaN(startDate.getTime()) && startDate > targetDate) continue;
-        if (endDate && !Number.isNaN(endDate.getTime()) && endDate < targetDate) continue;
+
+        // Una fila con Last_Day informado se considera cerrada.
+        // Si el mismo agente tiene otra fila con Last_Day en blanco, esa fila si lo mantiene activo.
+        if (lastDayRaw) continue;
+        if (startDate && startDate > targetDate) continue;
 
         const key = String(agent['Emp ID'] ?? agent['Getty Username'] ?? agent['Full Name'] ?? '').trim().toLowerCase();
         if (key) activeAgents.set(key, agent);
