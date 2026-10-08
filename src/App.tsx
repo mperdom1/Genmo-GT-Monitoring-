@@ -454,7 +454,7 @@ export default function App() {
     const rows = tsv ? parseTSV(tsv) : [];
     // GM-GT sheet names are the authoritative week, e.g. "Voice 10.05 - 10.11".
     // Do not let an older date found in the title/header override the selected week.
-    const sheetWeekMatch = sheetName.match(/(\\d{1,2})[.\\/-](\\d{1,2})/);
+    const sheetWeekMatch = sheetName.match(/(\d{1,2})[.\/-](\d{1,2})/);
     let selectedDate = '';
     if (sheetWeekMatch) {
       const month = Number(sheetWeekMatch[1]);
@@ -734,11 +734,19 @@ export default function App() {
 
       // Some exports place the first date in col 0 and then leave blanks between days.
       // In that case, mapping by column index shifts dates by +1 day. Prefer sequential mapping.
-      const dayDates = fixYearWrap(
-        sequentialHeaderDates.length >= 7
-          ? sequentialHeaderDates.slice(0, 7)
-          : dayDatesByColumn
-      );
+      // For GM-GT, the selected sheet name is the source of truth for the week.
+      // The workbook's internal From/To row can contain the previous week's dates.
+      const dayDates = isGmNormalizedSchedule && weekStart
+        ? days.map((_, index) => {
+            const d = new Date(weekStart);
+            d.setDate(weekStart.getDate() + index);
+            return d;
+          })
+        : fixYearWrap(
+            sequentialHeaderDates.length >= 7
+              ? sequentialHeaderDates.slice(0, 7)
+              : dayDatesByColumn
+          );
 
       const hasHeaderDates = dayDates.some((d) => d !== null);
       if (!hasHeaderDates && !weekStart) {
