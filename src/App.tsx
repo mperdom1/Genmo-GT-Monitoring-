@@ -478,8 +478,8 @@ export default function App() {
         const normalizedCompanion = normalizeGMInput(companionRows, selectedDate || '');
 
         if (normalizedMain && normalizedCompanion) {
-          // Voice y Chat se combinan en un solo registro semanal por agente.
-          // Para cada día se conserva el horario real; OFF no reemplaza un horario.
+          // Voice + Chat: una sola fila semanal por Extension.
+          // Para cada día guardamos el mejor horario disponible.
           const weeklyByExtension = new Map<string, string[]>();
 
           const addRow = (candidate: string[]) => {
@@ -497,17 +497,22 @@ export default function App() {
             for (let day = 0; day < 7; day++) {
               const inIdx = 2 + day * 2;
               const outIdx = inIdx + 1;
+
               const candidateIn = String(candidate[inIdx] || '').trim();
               const candidateOut = String(candidate[outIdx] || '').trim();
               const currentIn = String(weekly[inIdx] || '').trim();
               const currentOut = String(weekly[outIdx] || '').trim();
 
-              const candidateHasSchedule = Boolean(candidateIn || candidateOut) &&
-                !(candidateIn.toUpperCase() === 'OFF' && candidateOut.toUpperCase() === 'OFF');
-              const currentHasSchedule = Boolean(currentIn || currentOut) &&
-                !(currentIn.toUpperCase() === 'OFF' && currentOut.toUpperCase() === 'OFF');
+              const isOff = (v: string) => {
+                const x = v.toUpperCase();
+                return !v || x === 'OFF';
+              };
 
-              if (!currentHasSchedule && candidateHasSchedule) {
+              const candidateHasSchedule = !isOff(candidateIn) || !isOff(candidateOut);
+              const currentHasSchedule = !isOff(currentIn) || !isOff(currentOut);
+
+              // Horario real > OFF/blanco.
+              if (candidateHasSchedule && !currentHasSchedule) {
                 weekly[inIdx] = candidate[inIdx];
                 weekly[outIdx] = candidate[outIdx];
               } else if (!currentIn && !currentOut && (candidateIn || candidateOut)) {
