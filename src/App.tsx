@@ -342,10 +342,15 @@ function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
   const idIdx = header.findIndex((h) => h.toUpperCase() === 'ID');
   const firstScheduleCol = Math.max(lobIdx, gettyIdx, idIdx) + 1;
   const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  const groupSize = 8;
 
-  if (header.length < firstScheduleCol + days.length * groupSize) {
-    throw new Error('Detecte el formato GM-GT, pero no encontre los 8 campos completos de Mon a Sun.');
+  // GM-GT puede venir en dos formatos:
+  // Voice: 8 campos por día (shift + breaks + lunch + shift end).
+  // Chat: 2 campos por día (shift start + shift end).
+  const availableScheduleCols = header.length - firstScheduleCol;
+  const groupSize = availableScheduleCols >= days.length * 8 ? 8 : 2;
+
+  if (availableScheduleCols < days.length * groupSize) {
+    throw new Error('Detecte el formato GM-GT, pero no encontre los campos completos de Mon a Sun.');
   }
 
   let startDate = weekStartDate || inferWeekStartFromRows(scheduleData.slice(0, gmHeaderIdx));
@@ -375,20 +380,16 @@ function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
     for (let dayIndex = 0; dayIndex < days.length; dayIndex++) {
       const base = firstScheduleCol + dayIndex * groupSize;
       const shiftIn = String(source[base] || '').trim();
-      const break1Start = String(source[base + 1] || '').trim();
-      const break1End = String(source[base + 2] || '').trim();
-      const lunchStart = String(source[base + 3] || '').trim();
-      const lunchEnd = String(source[base + 4] || '').trim();
-      const break2Start = String(source[base + 5] || '').trim();
-      const break2End = String(source[base + 6] || '').trim();
-      const shiftOut = String(source[base + 7] || '').trim();
+      const shiftOut = String(source[base + (groupSize === 8 ? 7 : 1)] || '').trim();
       row.push(shiftIn, shiftOut);
 
-      const pauseParts = [
-        ['Break 1', break1Start, break1End],
-        ['Lunch', lunchStart, lunchEnd],
-        ['Break 2', break2Start, break2End],
-      ].filter(([, from, to]) => from || to);
+      const pauseParts = groupSize === 8
+        ? [
+            ['Break 1', String(source[base + 1] || '').trim(), String(source[base + 2] || '').trim()],
+            ['Lunch', String(source[base + 3] || '').trim(), String(source[base + 4] || '').trim()],
+            ['Break 2', String(source[base + 5] || '').trim(), String(source[base + 6] || '').trim()],
+          ].filter(([, from, to]) => from || to)
+        : [];
 
       if (pauseParts.length) {
         const key = `${rawId}|${dayIndex}`;
