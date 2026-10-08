@@ -150,8 +150,14 @@ function parseTSV(tsv: string) {
 }
 
 function parseVisualCode(attendanceIdRaw: string) {
-  const match = attendanceIdRaw.match(/\((\d+)\)/);
-  return match?.[1] ?? '';
+  const raw = String(attendanceIdRaw || '').trim();
+
+  // GM-GT normalizado puede traer la extensión directamente (ej. "5175"),
+  // mientras que otros formatos la traen dentro de "(5175)".
+  const match = raw.match(/\((\d+)\)/);
+  if (match?.[1]) return match[1];
+
+  return /^\d+$/.test(raw) ? raw : '';
 }
 
 function convertTime(timeStr: string) {
