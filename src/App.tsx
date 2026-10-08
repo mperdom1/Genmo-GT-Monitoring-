@@ -845,7 +845,6 @@ export default function App() {
         const status = String(row.Remark ?? row.Status ?? '').trim().toUpperCase();
         const type = String(row.ScheduleType ?? '').trim().toUpperCase();
         if (status.includes('TERM') || type.includes('TERM')) return false;
-        if (status === 'LEAVE' || type.includes('LEAVE') || type.includes('VACATION')) return false;
 
         const keyCandidates = [
           row['VisualCode'],
