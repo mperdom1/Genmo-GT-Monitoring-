@@ -425,7 +425,7 @@ export default function App() {
       if (googleUserTimelineRows.length > 0) {
         const hc = buildGoogleHeadcountTSV(googleUserTimelineRows, selectedDate);
         setHeadcountDataStr(hc.tsv);
-        setFileInfo((current) => current.replace(/, Usertimeline cargada desde Google Sheets \([^)]*\)/, `, Usertimeline cargada desde Google Sheets (${hc.count} agentes HN/Agent válidos para la semana)`));
+        setFileInfo((current) => current.replace(/, Usertimeline cargada desde Google Sheets \([^)]*\)/, `, Usertimeline cargada desde Google Sheets (${hc.count} agentes GT/Agent válidos para la semana)`));
       }
     }
   };
@@ -466,9 +466,9 @@ export default function App() {
           const hc = buildGoogleHeadcountTSV(googleTimeline.rows, selectedDate);
           if (hc.count > 0) {
             setHeadcountDataStr(hc.tsv);
-            info += `, Usertimeline cargada desde Google Sheets (${hc.count} agentes HN/Agent válidos para la semana)`;
+            info += `, Usertimeline cargada desde Google Sheets (${hc.count} agentes GT/Agent válidos para la semana)`;
           } else {
-            info += ', sin agentes HN/Agent válidos en Google Usertimeline para la semana';
+            info += ', sin agentes GT/Agent válidos en Google Usertimeline para la semana';
           }
         } catch (googleError: any) {
           info += ', no se pudo cargar Usertimeline desde Google Sheets';
@@ -827,7 +827,7 @@ export default function App() {
         const startDate = startRaw ? new Date(startRaw) : null;
         const endDate = endRaw ? new Date(endRaw) : null;
 
-        if (site !== 'HN' || role !== 'agent') continue;
+        if (site !== 'GT' || role !== 'agent') continue;
         if (startDate && !Number.isNaN(startDate.getTime()) && startDate > targetDate) continue;
         if (endDate && !Number.isNaN(endDate.getTime()) && endDate < targetDate) continue;
 
