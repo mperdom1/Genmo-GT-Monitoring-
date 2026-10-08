@@ -363,7 +363,7 @@ function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
   if (!startDate) throw new Error('Detecte el formato GM-GT, pero no pude identificar la fecha inicial de la semana.');
 
   const start = new Date(`${startDate}T00:00:00`);
-  const normalizedHeader = ['NAME', 'ATTENDANCE ID'];
+  const normalizedHeader = ['NAME', 'EXTENSION'];
   const dateHeader = ['', ''];
   days.forEach((day, dayIndex) => {
     normalizedHeader.push(`${day.toUpperCase()} IN`, `${day.toUpperCase()} OUT`);
@@ -593,6 +593,7 @@ export default function App() {
       const headers = scheduleData[headerIdx].map((h) => String(h || '').toUpperCase().trim());
       const nameIdx = headers.findIndex((h) => h === 'NAME');
       const attendanceIdIdx = headers.findIndex((h) => h.includes('ATTENDANCE'));
+      const extensionIdx = headers.findIndex((h) => h === 'EXTENSION');
 
       const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       const dayCols = days.map((day) => {
@@ -602,8 +603,10 @@ export default function App() {
       });
 
       const hasMissingDayColumns = dayCols.some((d) => d.inIdx === -1 || d.outIdx === -1);
-      if (nameIdx === -1 || attendanceIdIdx === -1 || hasMissingDayColumns) {
-        alert('Faltan columnas requeridas: Name, Attendance ID y columnas IN/OUT de lunes a domingo.');
+      if (nameIdx === -1 || (gmNormalized ? extensionIdx === -1 : attendanceIdIdx === -1) || hasMissingDayColumns) {
+        alert(gmNormalized
+          ? 'Faltan columnas requeridas para GM-GT: Name, Extension y columnas IN/OUT de lunes a domingo.'
+          : 'Faltan columnas requeridas: Name, Attendance ID y columnas IN/OUT de lunes a domingo.');
         return;
       }
 
@@ -721,13 +724,15 @@ export default function App() {
         const row = scheduleData[rowIdx];
         if (!row || row.length === 0) continue;
 
-        const attendanceId = (row[attendanceIdIdx] || '').trim();
         const fullName = (row[nameIdx] || '').trim();
-        if (!attendanceId && !fullName) continue;
+        const attendanceId = gmNormalized ? '' : (row[attendanceIdIdx] || '').trim();
+        const extensionRaw = gmNormalized ? (row[extensionIdx] || '').trim() : '';
+        if (!attendanceId && !extensionRaw && !fullName) continue;
 
-        let extension = parseVisualCode(attendanceId);
-        if (!attendanceId) {
-          // Fila con nombre pero sin Attendance ID: se intenta ubicar por nombre en el headcount.
+        let extension = gmNormalized ? extensionRaw.replace(/\D/g, '') : parseVisualCode(attendanceId);
+        if (!extension) {
+          // GM-GT usa la Extension como llave contra Usertimeline. Los formatos legacy pueden buscar por nombre.
+          // Si no hay Extension, se intenta ubicar por nombre en el headcount.
           const byName = rosterByName[normalizeName(fullName)];
           if (byName && byName.length > 0) {
             extension = byName[byName.length - 1].extension;
@@ -740,7 +745,7 @@ export default function App() {
         const rosterMatch = pickRoster(extension, fullName);
 
         if (headcountDataStr.trim() && !rosterMatch) {
-          unmatchedAttendance.add(attendanceId || fullName);
+          unmatchedAttendance.add(extension || attendanceId || fullName);
           if (gmNormalized) continue;
         }
 
@@ -815,13 +820,13 @@ export default function App() {
       const notes: string[] = [`Generado: ${out.length} filas.`];
       if (headcountDataStr.trim() && unmatchedAttendance.size > 0) {
         const sample = Array.from(unmatchedAttendance).slice(0, 8).join(', ');
-        notes.push(`Ojo: ${unmatchedAttendance.size} Attendance no hizo match con headcount. Ejemplos: ${sample}`);
+        notes.push(`Ojo: ${unmatchedAttendance.size} Extension/Attendance no hizo match con headcount. Ejemplos: ${sample}`);
       }
       if (noIdRows.size > 0) {
-        notes.push(`${noIdRows.size} agente(s) sin Attendance ID y sin match por nombre: NO se incluyeron: ${Array.from(noIdRows).slice(0, 8).join(', ')}`);
+        notes.push(`${noIdRows.size} agente(s) sin Extension/Attendance ID y sin match por nombre: NO se incluyeron: ${Array.from(noIdRows).slice(0, 8).join(', ')}`);
       }
       if (idFromName.size > 0) {
-        notes.push(`${idFromName.size} agente(s) sin Attendance ID se ubicaron por nombre en el headcount: ${Array.from(idFromName).slice(0, 8).join(', ')}`);
+        notes.push(`${idFromName.size} agente(s) sin Extension/Attendance ID se ubicaron por nombre en el headcount: ${Array.from(idFromName).slice(0, 8).join(', ')}`);
       }
       if (sharedExtensions.size > 0) {
         notes.push(`Extension compartida por varias personas en el headcount (${Array.from(sharedExtensions).join(', ')}); elegi la persona por nombre. Revisa que sea la correcta.`);
