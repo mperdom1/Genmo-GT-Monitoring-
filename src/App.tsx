@@ -429,20 +429,55 @@ export default function App() {
   const loadWeek = (wb: XLSX.WorkBook, sheetName: string) => {
     const ws = wb.Sheets[sheetName];
     if (!ws) return;
+
     const tsv = sheetToTSV(ws);
     const rows = tsv ? parseTSV(tsv) : [];
     const selectedDate = firstDateInRow(ws, 0) || firstDateInRow(ws, 1) ||
       inferWeekStartFromRows(rows.slice(0, 5));
 
+    // Voice y Chat de la misma semana forman un solo schedule.
+    // Si existe la hoja compañera, las unimos antes de generar el archivo final.
+    const isGM = rows.some((row) => {
+      const upper = row.map((cell) => String(cell || '').toUpperCase().trim());
+      return upper.includes('LOB') && upper.includes('GETTY NAME') && upper.includes('ID');
+    });
+
+    let combinedTsv = tsv;
+    if (isGM) {
+      const prefix = /^\\s*(Voice|Chat)\\b/i.exec(sheetName)?.[1];
+      const companionPrefix = prefix ? (prefix.toLowerCase() === 'voice' ? 'Chat' : 'Voice') : '';
+      const companionName = companionPrefix
+        ? wb.SheetNames.find((name) =>
+            name.toLowerCase() === sheetName.toLowerCase().replace(/^\\s*(Voice|Chat)\\b/i, companionPrefix)
+          )
+        : undefined;
+
+      if (companionName) {
+        const companionRows = parseTSV(sheetToTSV(wb.Sheets[companionName]));
+        const normalizedMain = normalizeGMInput(rows, selectedDate || '');
+        const normalizedCompanion = normalizeGMInput(companionRows, selectedDate || '');
+
+        if (normalizedMain && normalizedCompanion) {
+          const mergedRows = [
+            normalizedMain.rows[0],
+            normalizedMain.rows[1],
+            ...normalizedMain.rows.slice(2),
+            ...normalizedCompanion.rows.slice(2),
+          ];
+          combinedTsv = mergedRows.map((row) => row.join('\\t')).join('\\n');
+        }
+      }
+    }
+
     setSelectedSheet(sheetName);
-    setScheduleDataStr(tsv);
+    setScheduleDataStr(combinedTsv);
     setOutputData([]);
     if (selectedDate) {
       setWeekStartDate(selectedDate);
       if (googleUserTimelineRows.length > 0) {
         const hc = buildGoogleHeadcountTSV(googleUserTimelineRows, selectedDate);
         setHeadcountDataStr(hc.tsv);
-        setFileInfo((current) => current.replace(/, Usertimeline cargada desde Google Sheets \([^)]*\)/, `, Usertimeline cargada desde Google Sheets (${hc.count} agentes GT/Agent válidos para la semana)`));
+        setFileInfo((current) => current.replace(/, Usertimeline cargada desde Google Sheets \\([^)]*\\)/, `, Usertimeline cargada desde Google Sheets (${hc.count} agentes GT/Agent válidos para la semana)`));
       }
     }
   };
