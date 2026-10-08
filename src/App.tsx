@@ -260,6 +260,126 @@ function isClockTime(value: string) {
   return /^(\d{1,2}:\d{2})(\s?(AM|PM))?$/i.test(value.trim());
 }
 
+
+function inferWeekStartFromRows(rows: string[][], fallbackYear = new Date().getFullYear()) {
+  for (const row of rows) {
+    for (const cell of row) {
+      const parsed = parseHeaderDateToken(String(cell || ''), fallbackYear);
+      if (parsed) return formatDate(parsed);
+    }
+  }
+  return '';
+}
+
+function normalizeGoogleDate(value: unknown) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const direct = new Date(raw);
+  if (!Number.isNaN(direct.getTime())) return direct;
+  const match = raw.match(/^(\d{1,2})[\\/.-](\d{1,2})[\\/.-](\d{4})$/);
+  if (match) {
+    const parsed = new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]));
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
+function buildGoogleHeadcountTSV(rows: GoogleSheetRow[], weekDate: string) {
+  const target = weekDate ? new Date(`${weekDate}T00:00:00`) : null;
+  const validRows = rows.filter((row) => {
+    if (String(row.Site ?? '').trim().toUpperCase() !== 'HN') return false;
+    if (String(row.Role ?? '').trim().toUpperCase() !== 'AGENT') return false;
+    if (!target) return true;
+    const start = normalizeGoogleDate(row.Start);
+    const lastDay = normalizeGoogleDate(row.Last_Day ?? row.End);
+    if (start && start > target) return false;
+    if (lastDay && lastDay < target) return false;
+    return true;
+  });
+  const lines = validRows.map((row) => [
+    String(row['Emp ID'] ?? '').trim(),
+    String(row['Full Name'] ?? '').trim(),
+    String(row['Short Name'] ?? '').trim(),
+    String(row.Extension ?? '').trim(),
+  ].join('\t')).filter((line) => line.replace(/\t/g, '').trim());
+  return {
+    tsv: ['Emp ID\tFull Name\tShort Name\tExtension', ...lines].join('\n'),
+    count: lines.length,
+  };
+}
+
+function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
+  const gmHeaderIdx = scheduleData.findIndex((row) => {
+    const upper = row.map((cell) => String(cell || '').toUpperCase().trim());
+    return upper.includes('LOB') && upper.includes('GETTY NAME') && upper.includes('ID');
+  });
+  if (gmHeaderIdx === -1) return null;
+
+  const header = scheduleData[gmHeaderIdx].map((cell) => String(cell || '').trim());
+  const lobIdx = header.findIndex((h) => h.toUpperCase() === 'LOB');
+  const gettyIdx = header.findIndex((h) => h.toUpperCase() === 'GETTY NAME');
+  const idIdx = header.findIndex((h) => h.toUpperCase() === 'ID');
+  const firstScheduleCol = Math.max(lobIdx, gettyIdx, idIdx) + 1;
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const groupSize = 8;
+
+  if (header.length < firstScheduleCol + days.length * groupSize) {
+    throw new Error('Detecte el formato GM-GT, pero no encontre los 8 campos completos de Mon a Sun.');
+  }
+
+  let startDate = weekStartDate || inferWeekStartFromRows(scheduleData.slice(0, gmHeaderIdx));
+  if (!startDate) throw new Error('Detecte el formato GM-GT, pero no pude identificar la fecha inicial de la semana.');
+
+  const start = new Date(`${startDate}T00:00:00`);
+  const normalizedHeader = ['NAME', 'ATTENDANCE ID'];
+  const dateHeader = ['', ''];
+  days.forEach((day, dayIndex) => {
+    normalizedHeader.push(`${day.toUpperCase()} IN`, `${day.toUpperCase()} OUT`);
+    const date = new Date(start);
+    date.setDate(start.getDate() + dayIndex);
+    const token = `${date.getDate()}-${MONTH_ABBR[date.getMonth()]}`;
+    dateHeader.push(token, token);
+  });
+
+  const rows: string[][] = [dateHeader, normalizedHeader];
+  const pausesByIdDay: Record<string, string> = {};
+
+  for (let r = gmHeaderIdx + 1; r < scheduleData.length; r++) {
+    const source = scheduleData[r];
+    const rawId = String(source[idIdx] || '').trim();
+    if (!rawId) continue;
+
+    const row: string[] = ['', rawId];
+    for (let dayIndex = 0; dayIndex < days.length; dayIndex++) {
+      const base = firstScheduleCol + dayIndex * groupSize;
+      const shiftIn = String(source[base] || '').trim();
+      const break1Start = String(source[base + 1] || '').trim();
+      const break1End = String(source[base + 2] || '').trim();
+      const lunchStart = String(source[base + 3] || '').trim();
+      const lunchEnd = String(source[base + 4] || '').trim();
+      const break2Start = String(source[base + 5] || '').trim();
+      const break2End = String(source[base + 6] || '').trim();
+      const shiftOut = String(source[base + 7] || '').trim();
+      row.push(shiftIn, shiftOut);
+
+      const pauseParts = [
+        ['Break 1', break1Start, break1End],
+        ['Lunch', lunchStart, lunchEnd],
+        ['Break 2', break2Start, break2End],
+      ].filter(([, from, to]) => from || to);
+
+      if (pauseParts.length) {
+        pausesByIdDay[`${rawId}|${dayIndex}`] = pauseParts
+          .map(([label, from, to]) => `${label}: ${from || ''} - ${to || ''}`)
+          .join(' | ');
+      }
+    }
+    rows.push(row);
+  }
+
+  return { rows, pausesByIdDay, weekStartDate: startDate };
+}
+
 export default function App() {
   const [scheduleDataStr, setScheduleDataStr] = useState('');
   const [headcountDataStr, setHeadcountDataStr] = useState('');
@@ -310,7 +430,27 @@ export default function App() {
           info += `, pero no pude leer el headcount de ${userTimelineName} (revisa Emp ID, Full Name, Short Name, Extension)`;
         }
       } else {
-        info += ', sin hoja Usertimeline (pega el headcount en la Caja 2 si lo necesitas)';
+        const selectedWeek = weeks[weeks.length - 1];
+        const selectedWs = wb.Sheets[selectedWeek];
+        const selectedTsv = selectedWs ? sheetToTSV(selectedWs) : '';
+        const selectedRows = selectedTsv ? parseTSV(selectedTsv) : [];
+        const selectedDate = firstDateInRow(selectedWs, 0) || firstDateInRow(selectedWs, 1) ||
+          inferWeekStartFromRows(selectedRows.slice(0, 5));
+
+        try {
+          const googleTimeline = await fetchGoogleSheetData('Usertimeline');
+          const hc = buildGoogleHeadcountTSV(googleTimeline.rows, selectedDate);
+          if (hc.count > 0) {
+            setHeadcountDataStr(hc.tsv);
+            info += `, Usertimeline cargada desde Google Sheets (${hc.count} agentes HN/Agent válidos para la semana)`;
+          } else {
+            info += ', sin agentes HN/Agent válidos en Google Usertimeline para la semana';
+          }
+        } catch (googleError: any) {
+          info += ', no se pudo cargar Usertimeline desde Google Sheets';
+          console.error(googleError);
+          alert(`El GM-GT no trae Usertimeline y no pude cargarla desde Google Sheets: ${googleError?.message || googleError}`);
+        }
       }
 
       setWorkbook(wb);
@@ -336,17 +476,25 @@ export default function App() {
         return;
       }
 
+      let gmPauseMap: Record<string, string> = {};
+      const gmNormalized = normalizeGMInput(scheduleData, weekStartDate);
+      if (gmNormalized) {
+        scheduleData.splice(0, scheduleData.length, ...gmNormalized.rows);
+        gmPauseMap = gmNormalized.pausesByIdDay;
+        if (!weekStartDate && gmNormalized.weekStartDate) setWeekStartDate(gmNormalized.weekStartDate);
+      }
+
       const headerIdx = scheduleData.findIndex((row) => {
-        const upper = row.map((cell) => cell.toUpperCase().trim());
+        const upper = row.map((cell) => String(cell || '').toUpperCase().trim());
         return upper.includes('NAME') && upper.some((c) => c.includes('MON IN'));
       });
 
       if (headerIdx === -1) {
-        alert('No encontre el encabezado. Debe incluir Name, Attendance ID, Mon IN, Mon Out... Sun IN, Sun Out.');
+        alert('No encontre el encabezado. Debe ser un GM-GT o una tabla Getty con Mon IN/OUT ... Sun IN/OUT.');
         return;
       }
 
-      const headers = scheduleData[headerIdx].map((h) => h.toUpperCase().trim());
+      const headers = scheduleData[headerIdx].map((h) => String(h || '').toUpperCase().trim());
       const nameIdx = headers.findIndex((h) => h === 'NAME');
       const attendanceIdIdx = headers.findIndex((h) => h.includes('ATTENDANCE'));
 
@@ -553,7 +701,7 @@ export default function App() {
             Remark: unknownStatus ? 'Check status' : (statusLabels?.remark ?? (isOff ? 'Rest Day' : 'Present')),
             ScheduleType: unknownStatus ? firstCell : (statusLabels?.scheduleType ?? (isOff ? 'Rest Day' : ' Regular')),
             WorkType: isOff ? '' : defaultWorkType,
-            BreakLunchScheduledDisplay: '',
+            BreakLunchScheduledDisplay: gmPauseMap[`${attendanceId}|${day}`] || '',
             BreakLunchStaffedDisplay: '',
             BreakLunchRemark: '',
           });
@@ -862,7 +1010,7 @@ export default function App() {
             </label>
             <textarea
               className="flex-1 min-h-[260px] p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y font-mono whitespace-pre"
-              placeholder="Pega aqui la tabla de horarios (Name, Attendance ID, Mon IN/OUT ... Sun IN/OUT)"
+              placeholder="GM-GT de Julio o tabla Getty con Mon IN/OUT ... Sun IN/OUT"
               value={scheduleDataStr}
               onChange={(e) => setScheduleDataStr(e.target.value)}
             />
