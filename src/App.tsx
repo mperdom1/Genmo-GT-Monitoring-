@@ -921,7 +921,7 @@ export default function App() {
       // conservamos el que tenga horario real (Scheduled > 0).
       const uniqueOutput = new Map<string, OutputRow>();
       for (const row of out) {
-        const key = \`${String(row.VisualCode).trim()}|${String(row.Date).trim()}\`;
+        const key = `${String(row.VisualCode).trim()}|${String(row.Date).trim()}`;
         const current = uniqueOutput.get(key);
         if (!current || Number(row.Scheduled || 0) > Number(current.Scheduled || 0)) {
           uniqueOutput.set(key, row);
