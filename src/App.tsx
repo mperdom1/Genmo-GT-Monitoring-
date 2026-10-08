@@ -939,16 +939,37 @@ export default function App() {
       return;
     }
 
+    const versionDateInput = window.prompt(
+      'Fecha de recepción del email (Version Date):',
+      new Date().toISOString().slice(0, 10)
+    );
+
+    if (versionDateInput === null) return;
+
+    const versionDate = versionDateInput.trim();
+    const parsedVersionDate = new Date(versionDate + 'T00:00:00');
+
+    if (!versionDate || Number.isNaN(parsedVersionDate.getTime())) {
+      alert('Ingresa una fecha válida para Version Date.');
+      return;
+    }
+
     try {
       setIntegrationStatus('Guardando semana en Google Sheets...');
-      const weekName = formatDate(new Date(`${weekStartDate}T00:00:00`));
-      await saveGoogleSheetWeek(weekName, outputData as unknown as GoogleSheetRow[]);
-      setIntegrationStatus(`✓ Semana ${weekName} guardada en Google Sheets`);
+
+      const weekName = formatDate(new Date(weekStartDate + 'T00:00:00'));
+      const versionedRows = outputData.map((row) => ({
+        ...row,
+        'Version Date': formatDate(parsedVersionDate),
+      }));
+
+      await saveGoogleSheetWeek(weekName, versionedRows as unknown as GoogleSheetRow[]);
+      setIntegrationStatus('✓ Semana ' + weekName + ' guardada | Version Date: ' + formatDate(parsedVersionDate));
       await handleGoogleWeeks();
     } catch (error: any) {
       console.error(error);
       setIntegrationStatus('No se pudo guardar la semana en Google Sheets');
-      alert(`No se pudo guardar la semana: ${error?.message || error}`);
+      alert('No se pudo guardar la semana: ' + (error?.message || error));
     }
   };
 
