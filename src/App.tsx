@@ -478,20 +478,63 @@ export default function App() {
         const normalizedCompanion = normalizeGMInput(companionRows, selectedDate || '');
 
         if (normalizedMain && normalizedCompanion) {
+          // Un solo schedule por agente/día. Voice tiene prioridad porque contiene breaks.
+          // Chat solo completa un día si Voice no tiene horario para ese agente.
+          const mergedByExtension = new Map<string, string[]>();
+
+          const addRow = (candidate: string[]) => {
+            const extension = String(candidate[1] || '').replace(/\D/g, '');
+            if (!extension) return;
+
+            const current = mergedByExtension.get(extension);
+            if (!current) {
+              mergedByExtension.set(extension, [...candidate]);
+              return;
+            }
+
+            for (let day = 0; day < 7; day++) {
+              const inIdx = 2 + day * 2;
+              const outIdx = inIdx + 1;
+              const currentIn = String(current[inIdx] || '').trim().toUpperCase();
+              const currentOut = String(current[outIdx] || '').trim().toUpperCase();
+              const candidateIn = String(candidate[inIdx] || '').trim().toUpperCase();
+              const candidateOut = String(candidate[outIdx] || '').trim().toUpperCase();
+
+              const currentOff = (!currentIn && !currentOut) || (currentIn === 'OFF' && currentOut === 'OFF');
+              const candidateOff = (!candidateIn && !candidateOut) || (candidateIn === 'OFF' && candidateOut === 'OFF');
+
+              if (currentOff && !candidateOff) {
+                current[inIdx] = candidate[inIdx];
+                current[outIdx] = candidate[outIdx];
+              }
+            }
+          };
+
+          // Voice primero: conserva sus horarios y sus breaks.
+          normalizedMain.rows.slice(2).forEach(addRow);
+          // Chat agrega agentes/días que Voice no tenga.
+          normalizedCompanion.rows.slice(2).forEach(addRow);
+
           const mergedRows = [
             normalizedMain.rows[0],
             normalizedMain.rows[1],
-            ...normalizedMain.rows.slice(2),
-            ...normalizedCompanion.rows.slice(2),
+            ...Array.from(mergedByExtension.values()),
           ];
-          combinedTsv = mergedRows.map((row) => row.join('\\t')).join('\\n');
-          setLoadedGmPauseMap({ ...normalizedMain.pausesByIdDay, ...normalizedCompanion.pausesByIdDay });
-          setLoadedGmPauseMinutesMap({ ...normalizedMain.pauseMinutesByIdDay, ...normalizedCompanion.pauseMinutesByIdDay });
-        }
-      }
-    }
 
-    setSelectedSheet(sheetName);
+          combinedTsv = mergedRows.map((row) => row.join('\t')).join('\n');
+
+          // Los breaks siempre se identifican por Extension + día.
+          setLoadedGmPauseMap({
+            ...normalizedCompanion.pausesByIdDay,
+            ...normalizedMain.pausesByIdDay,
+          });
+          setLoadedGmPauseMinutesMap({
+            ...normalizedCompanion.pauseMinutesByIdDay,
+            ...normalizedMain.pauseMinutesByIdDay,
+          });
+        }
+
+(sheetName);
     setScheduleDataStr(combinedTsv);
     setOutputData([]);
     if (selectedDate) {
@@ -614,8 +657,8 @@ export default function App() {
       });
 
       const hasMissingDayColumns = dayCols.some((d) => d.inIdx === -1 || d.outIdx === -1);
-      if (nameIdx === -1 || (gmNormalized ? extensionIdx === -1 : attendanceIdIdx === -1) || hasMissingDayColumns) {
-        alert(gmNormalized
+      if (nameIdx === -1 || (isGmNormalizedSchedule ? extensionIdx === -1 : attendanceIdIdx === -1) || hasMissingDayColumns) {
+        alert(isGmNormalizedSchedule
           ? 'Faltan columnas requeridas para GM-GT: Name, Extension y columnas IN/OUT de lunes a domingo.'
           : 'Faltan columnas requeridas: Name, Attendance ID y columnas IN/OUT de lunes a domingo.');
         return;
@@ -757,7 +800,7 @@ export default function App() {
 
         if (headcountDataStr.trim() && !rosterMatch) {
           unmatchedAttendance.add(extension || attendanceId || fullName);
-          if (gmNormalized) continue;
+          if (isGmNormalizedSchedule) continue;
         }
 
         const visualCode = rosterMatch?.empId || extension;
@@ -773,7 +816,7 @@ export default function App() {
 
           const inStatus = normalizeStatus(inRaw);
           const outStatus = normalizeStatus(outRaw);
-          if (!gmNormalized && (TERMINATION_STATUSES.has(inStatus) || TERMINATION_STATUSES.has(outStatus))) continue;
+          if (!isGmNormalizedSchedule && (TERMINATION_STATUSES.has(inStatus) || TERMINATION_STATUSES.has(outStatus))) continue;
 
           const firstCell = inRaw || outRaw;
           const statusRaw = normalizeStatus(firstCell);
