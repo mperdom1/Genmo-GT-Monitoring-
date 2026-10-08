@@ -454,7 +454,7 @@ export default function App() {
     const rows = tsv ? parseTSV(tsv) : [];
     // GM-GT sheet names are the authoritative week, e.g. "Voice 10.05 - 10.11".
     // Do not let an older date found in the title/header override the selected week.
-    const sheetWeekMatch = sheetName.match(/(?:^|\\s)(\\d{1,2})[.\\/-](\\d{1,2})(?:\\s|$)/);
+    const sheetWeekMatch = sheetName.match(/(\\d{1,2})[.\\/-](\\d{1,2})/);
     let selectedDate = '';
     if (sheetWeekMatch) {
       const month = Number(sheetWeekMatch[1]);
