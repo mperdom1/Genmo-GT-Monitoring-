@@ -373,10 +373,22 @@ function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
 
   for (let r = gmHeaderIdx + 1; r < scheduleData.length; r++) {
     const source = scheduleData[r];
-    const rawId = String(source[idIdx] || '').trim();
+
+    // Chat-GT puts the employee ID inside a metadata cell like:
+    // "(5175) - GenMobile Fernanda Rios - CS"
+    // while its "ID" column contains the employee's full name.
+    const metadataCells = source.slice(0, firstScheduleCol);
+    const idCell = metadataCells.find((cell) => /\(\s*\d+\s*\)/.test(String(cell || '')));
+    const idMatch = idCell ? /\(\s*(\d+)\s*\)/.exec(String(idCell)) : null;
+    const rawId = idMatch?.[1] || String(source[idIdx] || '').trim();
     if (!rawId) continue;
 
-    const row: string[] = ['', rawId];
+    let normalizedName = String(source[idIdx] || '').trim();
+    if (!normalizedName || /^\(?\s*\d+\s*\)?$/.test(normalizedName)) {
+      normalizedName = String(idCell || '').replace(/^\(\s*\d+\s*\)\s*-\s*/, '').trim();
+    }
+
+    const row: string[] = [normalizedName, rawId];
     for (let dayIndex = 0; dayIndex < days.length; dayIndex++) {
       const base = firstScheduleCol + dayIndex * groupSize;
       const shiftIn = String(source[base] || '').trim();
