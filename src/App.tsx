@@ -255,9 +255,21 @@ function normalizeStatus(value: string) {
 
 function getStatusLabels(statusRaw: string) {
   const key = normalizeStatus(statusRaw);
+
   if (key === 'EML' || /\bMED(?:ICAL)?\b/.test(key)) {
     return { remark: 'Leave', scheduleType: 'Extended Medical Leave', isOff: true };
   }
+
+  // Cualquier variación que indique Leave/Vacation se conserva como Leave.
+  // Así no dependemos de una lista cerrada de nombres.
+  if (key.includes('VACATION') || key === 'VAC' || key.includes('LEAVE') || key === 'LOA') {
+    return {
+      remark: 'Leave',
+      scheduleType: key.includes('VACATION') || key === 'VAC' ? 'Vacation Leave' : 'Leave of Absence',
+      isOff: true,
+    };
+  }
+
   return STATUS_LABELS[key];
 }
 
