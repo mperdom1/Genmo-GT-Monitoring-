@@ -580,6 +580,7 @@ export default function App() {
         row.some((cell) => String(cell || '').toUpperCase().trim() === 'EXTENSION')
       );
       const gmNormalized = isAlreadyNormalizedGM ? null : normalizeGMInput(scheduleData, weekStartDate);
+      const isGmNormalizedSchedule = Boolean(gmNormalized) || isAlreadyNormalizedGM;
       if (isAlreadyNormalizedGM) {
         gmPauseMap = loadedGmPauseMap;
         gmPauseMinutesMap = loadedGmPauseMinutesMap;
@@ -735,11 +736,11 @@ export default function App() {
         if (!row || row.length === 0) continue;
 
         const fullName = (row[nameIdx] || '').trim();
-        const attendanceId = gmNormalized ? '' : (row[attendanceIdIdx] || '').trim();
-        const extensionRaw = gmNormalized ? (row[extensionIdx] || '').trim() : '';
+        const attendanceId = isGmNormalizedSchedule ? '' : (row[attendanceIdIdx] || '').trim();
+        const extensionRaw = isGmNormalizedSchedule ? (row[extensionIdx] || '').trim() : '';
         if (!attendanceId && !extensionRaw && !fullName) continue;
 
-        let extension = gmNormalized ? extensionRaw.replace(/\D/g, '') : parseVisualCode(attendanceId);
+        let extension = isGmNormalizedSchedule ? extensionRaw.replace(/\D/g, '') : parseVisualCode(attendanceId);
         if (!extension) {
           // GM-GT usa la Extension como llave contra Usertimeline. Los formatos legacy pueden buscar por nombre.
           // Si no hay Extension, se intenta ubicar por nombre en el headcount.
@@ -809,11 +810,11 @@ export default function App() {
             PnchOut: '',
             Staffed: minutes,
             Scheduled: minutes,
-            Paused: gmPauseMinutesMap[`${attendanceId}|${day}`] || 0,
+            Paused: gmPauseMinutesMap[`${isGmNormalizedSchedule ? extension : attendanceId}|${day}`] || 0,
             Remark: unknownStatus ? 'Check status' : (statusLabels?.remark ?? (isOff ? 'Rest Day' : 'Present')),
             ScheduleType: unknownStatus ? firstCell : (statusLabels?.scheduleType ?? (isOff ? 'Rest Day' : ' Regular')),
             WorkType: isOff ? '' : defaultWorkType,
-            BreakLunchScheduledDisplay: gmPauseMap[`${attendanceId}|${day}`] || '',
+            BreakLunchScheduledDisplay: gmPauseMap[`${isGmNormalizedSchedule ? extension : attendanceId}|${day}`] || '',
             BreakLunchStaffedDisplay: '',
             BreakLunchRemark: '',
           });
