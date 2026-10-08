@@ -478,19 +478,63 @@ export default function App() {
         const normalizedCompanion = normalizeGMInput(companionRows, selectedDate || '');
 
         if (normalizedMain && normalizedCompanion) {
-          // Un solo schedule por agente/día. Voice tiene prioridad porque contiene breaks.
-          // Chat solo completa un día si Voice no tiene horario para ese agente.
-          const mergedByExtension = new Map<string, string[]>();
+          // Voice y Chat se combinan en un solo registro semanal por agente.
+          // Para cada día se conserva el horario real; OFF no reemplaza un horario.
+          const weeklyByExtension = new Map<string, string[]>();
 
           const addRow = (candidate: string[]) => {
             const extension = String(candidate[1] || '').replace(/\D/g, '');
             if (!extension) return;
 
-            const current = mergedByExtension.get(extension);
-            if (!current) {
-              mergedByExtension.set(extension, [...candidate]);
-              return;
+            let weekly = weeklyByExtension.get(extension);
+            if (!weekly) {
+              weekly = new Array(candidate.length).fill('');
+              weekly[0] = candidate[0];
+              weekly[1] = extension;
+              weeklyByExtension.set(extension, weekly);
             }
+
+            for (let day = 0; day < 7; day++) {
+              const inIdx = 2 + day * 2;
+              const outIdx = inIdx + 1;
+              const candidateIn = String(candidate[inIdx] || '').trim();
+              const candidateOut = String(candidate[outIdx] || '').trim();
+              const currentIn = String(weekly[inIdx] || '').trim();
+              const currentOut = String(weekly[outIdx] || '').trim();
+
+              const candidateHasSchedule = Boolean(candidateIn || candidateOut) &&
+                !(candidateIn.toUpperCase() === 'OFF' && candidateOut.toUpperCase() === 'OFF');
+              const currentHasSchedule = Boolean(currentIn || currentOut) &&
+                !(currentIn.toUpperCase() === 'OFF' && currentOut.toUpperCase() === 'OFF');
+
+              if (!currentHasSchedule && candidateHasSchedule) {
+                weekly[inIdx] = candidate[inIdx];
+                weekly[outIdx] = candidate[outIdx];
+              } else if (!currentIn && !currentOut && (candidateIn || candidateOut)) {
+                weekly[inIdx] = candidate[inIdx];
+                weekly[outIdx] = candidate[outIdx];
+              }
+            }
+          };
+
+          normalizedMain.rows.slice(2).forEach(addRow);
+          normalizedCompanion.rows.slice(2).forEach(addRow);
+
+          combinedTsv = [
+            normalizedMain.rows[0],
+            normalizedMain.rows[1],
+            ...Array.from(weeklyByExtension.values()),
+          ].map((row) => row.join('\\t')).join('\\n');
+
+          // Voice contiene los breaks y tiene prioridad sobre Chat.
+          setLoadedGmPauseMap({
+            ...normalizedCompanion.pausesByIdDay,
+            ...normalizedMain.pausesByIdDay,
+          });
+          setLoadedGmPauseMinutesMap({
+            ...normalizedCompanion.pauseMinutesByIdDay,
+            ...normalizedMain.pauseMinutesByIdDay,
+          });        }
 
             for (let day = 0; day < 7; day++) {
               const inIdx = 2 + day * 2;
