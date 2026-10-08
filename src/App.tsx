@@ -452,8 +452,25 @@ export default function App() {
 
     const tsv = sheetToTSV(ws);
     const rows = tsv ? parseTSV(tsv) : [];
-    const selectedDate = firstDateInRow(ws, 0) || firstDateInRow(ws, 1) ||
-      inferWeekStartFromRows(rows.slice(0, 5));
+    // GM-GT sheet names are the authoritative week, e.g. "Voice 10.05 - 10.11".
+    // Do not let an older date found in the title/header override the selected week.
+    const sheetWeekMatch = sheetName.match(/(?:^|\\s)(\\d{1,2})[.\\/-](\\d{1,2})(?:\\s|$)/);
+    let selectedDate = '';
+    if (sheetWeekMatch) {
+      const month = Number(sheetWeekMatch[1]);
+      const day = Number(sheetWeekMatch[2]);
+      const year = new Date().getFullYear();
+      const parsed = new Date(year, month - 1, day);
+      if (!Number.isNaN(parsed.getTime())) {
+        const monday = new Date(parsed);
+        monday.setDate(parsed.getDate() - ((parsed.getDay() + 6) % 7));
+        selectedDate = monday.toISOString().slice(0, 10);
+      }
+    }
+    if (!selectedDate) {
+      selectedDate = firstDateInRow(ws, 0) || firstDateInRow(ws, 1) ||
+        inferWeekStartFromRows(rows.slice(0, 5));
+    }
 
     const isGM = rows.some((row) => {
       const upper = row.map((cell) => String(cell || '').toUpperCase().trim());
@@ -891,9 +908,22 @@ export default function App() {
         return;
       }
 
-      setOutputData(out);
+      // Seguridad final: una sola fila por VisualCode + Date.
+      // Si Voice/Chat produjo dos registros para el mismo agente/día,
+      // conservamos el que tenga horario real (Scheduled > 0).
+      const uniqueOutput = new Map<string, OutputRow>();
+      for (const row of out) {
+        const key = \`${String(row.VisualCode).trim()}|${String(row.Date).trim()}\`;
+        const current = uniqueOutput.get(key);
+        if (!current || Number(row.Scheduled || 0) > Number(current.Scheduled || 0)) {
+          uniqueOutput.set(key, row);
+        }
+      }
+      const finalOutput = Array.from(uniqueOutput.values());
 
-      const notes: string[] = [`Generado: ${out.length} filas.`];
+      setOutputData(finalOutput);
+
+      const notes: string[] = [`Generado: ${finalOutput.length} filas.`];
       if (headcountDataStr.trim() && unmatchedAttendance.size > 0) {
         const sample = Array.from(unmatchedAttendance).slice(0, 8).join(', ');
         notes.push(`Ojo: ${unmatchedAttendance.size} Extension/Attendance no hizo match con headcount. Ejemplos: ${sample}`);
