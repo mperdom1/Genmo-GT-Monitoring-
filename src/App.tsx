@@ -405,15 +405,27 @@ export default function App() {
   const [googleWeeks, setGoogleWeeks] = useState<string[]>([]);
   const [selectedGoogleWeek, setSelectedGoogleWeek] = useState('');
   const [reuseWeek, setReuseWeek] = useState('');
+  const [googleUserTimelineRows, setGoogleUserTimelineRows] = useState<GoogleSheetRow[]>([]);
 
   const loadWeek = (wb: XLSX.WorkBook, sheetName: string) => {
     const ws = wb.Sheets[sheetName];
     if (!ws) return;
+    const tsv = sheetToTSV(ws);
+    const rows = tsv ? parseTSV(tsv) : [];
+    const selectedDate = firstDateInRow(ws, 0) || firstDateInRow(ws, 1) ||
+      inferWeekStartFromRows(rows.slice(0, 5));
+
     setSelectedSheet(sheetName);
-    setScheduleDataStr(sheetToTSV(ws));
+    setScheduleDataStr(tsv);
     setOutputData([]);
-    const firstDate = firstDateInRow(ws, 0);
-    if (firstDate) setWeekStartDate(firstDate);
+    if (selectedDate) {
+      setWeekStartDate(selectedDate);
+      if (googleUserTimelineRows.length > 0) {
+        const hc = buildGoogleHeadcountTSV(googleUserTimelineRows, selectedDate);
+        setHeadcountDataStr(hc.tsv);
+        setFileInfo((current) => current.replace(/, Usertimeline cargada desde Google Sheets \([^)]*\)/, `, Usertimeline cargada desde Google Sheets (${hc.count} agentes HN/Agent válidos para la semana)`));
+      }
+    }
   };
 
   const handleFile = async (file: File | undefined) => {
@@ -448,6 +460,7 @@ export default function App() {
 
         try {
           const googleTimeline = await fetchGoogleSheetData('Usertimeline');
+          setGoogleUserTimelineRows(googleTimeline.rows);
           const hc = buildGoogleHeadcountTSV(googleTimeline.rows, selectedDate);
           if (hc.count > 0) {
             setHeadcountDataStr(hc.tsv);
@@ -997,15 +1010,3 @@ export default function App() {
               <select
                 className="px-3 py-2 border border-slate-300 rounded-lg outline-none"
                 value={reuseWeek}
-                onChange={(e) => setReuseWeek(e.target.value)}
-              >
-                <option value="">Selecciona una semana</option>
-                {googleWeeks.map((name) => <option key={name} value={name}>{name}</option>)}
-              </select>
-            </div>
-            <button
-              onClick={handleReuseWeek}
-              disabled={!reuseWeek}
-              className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-medium rounded-lg"
-            >
-              Reutilizar semana
