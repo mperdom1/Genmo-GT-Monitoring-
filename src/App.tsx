@@ -443,6 +443,8 @@ export default function App() {
   const [selectedGoogleWeek, setSelectedGoogleWeek] = useState('');
   const [reuseWeek, setReuseWeek] = useState('');
   const [googleUserTimelineRows, setGoogleUserTimelineRows] = useState<GoogleSheetRow[]>([]);
+  const [loadedGmPauseMap, setLoadedGmPauseMap] = useState<Record<string, string>>({});
+  const [loadedGmPauseMinutesMap, setLoadedGmPauseMinutesMap] = useState<Record<string, number>>({});
 
   const loadWeek = (wb: XLSX.WorkBook, sheetName: string) => {
     const ws = wb.Sheets[sheetName];
@@ -483,6 +485,8 @@ export default function App() {
             ...normalizedCompanion.rows.slice(2),
           ];
           combinedTsv = mergedRows.map((row) => row.join('\\t')).join('\\n');
+          setLoadedGmPauseMap({ ...normalizedMain.pausesByIdDay, ...normalizedCompanion.pausesByIdDay });
+          setLoadedGmPauseMinutesMap({ ...normalizedMain.pauseMinutesByIdDay, ...normalizedCompanion.pauseMinutesByIdDay });
         }
       }
     }
@@ -572,8 +576,14 @@ export default function App() {
 
       let gmPauseMap: Record<string, string> = {};
       let gmPauseMinutesMap: Record<string, number> = {};
-      const gmNormalized = normalizeGMInput(scheduleData, weekStartDate);
-      if (gmNormalized) {
+      const isAlreadyNormalizedGM = scheduleData.some((row) =>
+        row.some((cell) => String(cell || '').toUpperCase().trim() === 'EXTENSION')
+      );
+      const gmNormalized = isAlreadyNormalizedGM ? null : normalizeGMInput(scheduleData, weekStartDate);
+      if (isAlreadyNormalizedGM) {
+        gmPauseMap = loadedGmPauseMap;
+        gmPauseMinutesMap = loadedGmPauseMinutesMap;
+      } else if (gmNormalized) {
         scheduleData.splice(0, scheduleData.length, ...gmNormalized.rows);
         gmPauseMap = gmNormalized.pausesByIdDay;
         gmPauseMinutesMap = gmNormalized.pauseMinutesByIdDay;
