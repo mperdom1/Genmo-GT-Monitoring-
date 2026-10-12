@@ -338,18 +338,21 @@ function buildGoogleHeadcountTSV(rows: GoogleSheetRow[], weekDate: string) {
 function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
   const gmHeaderIdx = scheduleData.findIndex((row) => {
     const upper = row.map((cell) => String(cell || '').toUpperCase().replace(/\s+/g, ' ').trim());
-    const hasLob = upper.some((cell) => cell === 'LOB' || cell.includes('LOB'));
-    const hasGettyName = upper.some((cell) => cell.includes('GETTY NAME'));
-    const hasId = upper.some((cell) => cell === 'ID' || cell.endsWith(' ID'));
-    return hasLob && hasGettyName && hasId;
+    const hasLob = upper.some((cell) => cell === 'LOB');
+    const hasId = upper.some((cell) => cell === 'ID');
+    const hasName = upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME');
+    const hasQmetrics = upper.some((cell) => cell.includes('QMETRICS'));
+    return hasLob && hasId && hasName && (hasQmetrics || upper.some((cell) => cell.includes('GETTY NAME')));
   });
   if (gmHeaderIdx === -1) return null;
 
   const header = scheduleData[gmHeaderIdx].map((cell) => String(cell || '').trim());
   const lobIdx = header.findIndex((h) => h.toUpperCase() === 'LOB');
-  const gettyIdx = header.findIndex((h) => h.toUpperCase() === 'GETTY NAME');
   const idIdx = header.findIndex((h) => h.toUpperCase() === 'ID');
-  const firstScheduleCol = Math.max(lobIdx, gettyIdx, idIdx) + 1;
+  const nameIdx = header.findIndex((h) => ['NAME', 'GETTY NAME'].includes(h.toUpperCase()));
+  const qmetricsIdx = header.findIndex((h) => h.toUpperCase().includes('QMETRICS'));
+  const metadataEndIdx = Math.max(lobIdx, idIdx, nameIdx, qmetricsIdx);
+  const firstScheduleCol = metadataEndIdx + 1;
   const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   // GM-GT puede venir en dos formatos:
@@ -387,14 +390,15 @@ function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
     // "(5175) - GenMobile Fernanda Rios - CS"
     // while its "ID" column contains the employee's full name.
     const metadataCells = source.slice(0, firstScheduleCol);
-    const idCell = metadataCells.find((cell) => /\(\s*\d+\s*\)/.test(String(cell || '')));
-    const idMatch = idCell ? /\(\s*(\d+)\s*\)/.exec(String(idCell)) : null;
-    const rawId = idMatch?.[1] || String(source[idIdx] || '').trim();
-    if (!rawId) continue;
+    const idCell = qmetricsIdx >= 0 ? String(source[qmetricsIdx] || '') :
+      String(metadataCells.find((cell) => /\(\s*\d+\s*\)/.test(String(cell || ''))) || '');
+    const idMatch = /\(\s*(\d+)\s*\)/.exec(idCell);
+    const rawId = idMatch?.[1] || (idIdx >= 0 ? String(source[idIdx] || '').trim() : '');
+    if (!rawId || !/^\d+$/.test(rawId)) continue;
 
-    let normalizedName = String(source[idIdx] || '').trim();
+    let normalizedName = nameIdx >= 0 ? String(source[nameIdx] || '').trim() : '';
     if (!normalizedName || /^\(?\s*\d+\s*\)?$/.test(normalizedName)) {
-      normalizedName = String(idCell || '').replace(/^\(\s*\d+\s*\)\s*-\s*/, '').trim();
+      normalizedName = idCell.replace(/^\(\s*\d+\s*\)\s*-\s*/, '').trim();
     }
 
     const row: string[] = [normalizedName, rawId];
@@ -477,9 +481,10 @@ export default function App() {
 
     const isGM = rows.some((row) => {
       const upper = row.map((cell) => String(cell || '').toUpperCase().replace(/\s+/g, ' ').trim());
-      return upper.some((cell) => cell === 'LOB' || cell.includes('LOB')) &&
-        upper.some((cell) => cell.includes('GETTY NAME')) &&
-        upper.some((cell) => cell === 'ID' || cell.endsWith(' ID'));
+      return upper.some((cell) => cell === 'LOB') &&
+        upper.some((cell) => cell === 'ID') &&
+        upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME') &&
+        (upper.some((cell) => cell.includes('QMETRICS')) || upper.some((cell) => cell.includes('GETTY NAME')));
     });
 
     let combinedTsv = tsv;
