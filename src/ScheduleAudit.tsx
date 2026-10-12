@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { AlertTriangle, ClipboardCopy, Download, FileDiff, Upload } from 'lucide-react';
+import { AlertTriangle, ClipboardCopy, Download, FileDiff } from 'lucide-react';
 
 type AuditChange = { sheet: string; employee: string; field: string; before: string; after: string; category: string };
 type ParsedWorkbook = { fileName: string; sheets: Record<string, string[][]> };
@@ -126,7 +126,6 @@ export default function ScheduleAudit() {
   const changes = useMemo(() => oldBook && newBook ? buildChanges(oldBook, newBook) : [], [oldBook, newBook]);
   const retro = changes.filter((c) => /leave|day off|shift time|schedule value|break\/lunch/i.test(c.category));
   const employees = new Set(retro.map((c) => c.employee).filter((n) => n !== '—'));
-  const agentDays = new Set(retro.map((c) => `${norm(c.employee)}|${norm(c.sheet)}|${norm(c.field)}`));
   const counts = (category: string) => changes.filter((c) => c.category === category).length;
 
   const loadFile = async (which: 'old' | 'new', file?: File) => {
