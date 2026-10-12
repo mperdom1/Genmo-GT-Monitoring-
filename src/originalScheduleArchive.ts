@@ -4,6 +4,7 @@ import {
   listAll,
   ref as storageRef,
   uploadBytes,
+  updateMetadata,
   type StorageReference,
 } from 'firebase/storage';
 import { storage } from './firebase';
@@ -36,12 +37,18 @@ export async function archiveOriginalSchedule(file: File, weekStartDate: string)
       weekStartDate,
       originalFileName: file.name,
       uploadedAt,
+      archiveStatus: 'pending',
     },
   });
   return { path, name: versionName, uploadedAt, originalFileName: file.name };
 }
 
 /** Returns the most recent original workbook, never a transformed Google Sheets export. */
+export async function markOriginalScheduleCommitted(path: string) {
+  const fileRef = storageRef(storage, path);
+  await updateMetadata(fileRef, { customMetadata: { archiveStatus: 'committed' } });
+}
+
 export async function getLatestOriginalSchedule(weekStartDate: string) {
   if (!weekStartDate) return null;
   const folder = storageRef(storage, `original-schedules/${weekFolder(weekStartDate)}/versions`);
@@ -60,10 +67,13 @@ export async function getLatestOriginalSchedule(weekStartDate: string) {
       item,
       uploadedAt: metadata.customMetadata?.uploadedAt || metadata.timeCreated || '',
       originalFileName: metadata.customMetadata?.originalFileName || item.name,
+      archiveStatus: metadata.customMetadata?.archiveStatus || 'committed',
     };
   }));
-  versions.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-  const latest = versions[0];
+  const committedVersions = versions.filter((version) => version.archiveStatus === 'committed');
+  if (!committedVersions.length) return null;
+  committedVersions.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+  const latest = committedVersions[0];
   const bytes = await getBytes(latest.item);
   return {
     bytes,
