@@ -3,7 +3,7 @@ import { ArrowRightLeft, ClipboardCopy, Download, FileSpreadsheet, Upload } from
 import * as XLSX from 'xlsx';
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 import { storage } from './firebase';
-import { archiveOriginalSchedule, getLatestOriginalSchedule } from './originalScheduleArchive';
+import { archiveOriginalSchedule, getLatestOriginalSchedule, markOriginalScheduleCommitted } from './originalScheduleArchive';
 import { fetchGoogleSheetData, listGoogleSheetWeeks, saveGoogleSheetWeek, type GoogleSheetRow } from './googleSheets';
 import { buildHeadcountTSV, firstDateInRow, sheetToTSV } from './excel';
 import ScheduleAudit from './ScheduleAudit';
@@ -1224,13 +1224,14 @@ export default function App() {
         return;
       }
       setIntegrationStatus('Archivando el Excel original como nueva versión en Firebase...');
-      await archiveOriginalSchedule(sourceFile, weekStartDate);
+      const archivedOriginal = await archiveOriginalSchedule(sourceFile, weekStartDate);
       const versionedRows = outputData.map((row) => ({
         ...row,
         'Version Date': formatDate(parsedVersionDate),
       }));
 
       await saveGoogleSheetWeek(weekName, versionedRows as unknown as GoogleSheetRow[]);
+      await markOriginalScheduleCommitted(archivedOriginal.path);
       setIntegrationStatus('✓ Semana ' + weekName + ' guardada | Version Date: ' + formatDate(parsedVersionDate));
       await handleGoogleWeeks();
     } catch (error: any) {
