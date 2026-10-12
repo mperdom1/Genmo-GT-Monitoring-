@@ -5,6 +5,7 @@ import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage
 import { storage } from './firebase';
 import { fetchGoogleSheetData, listGoogleSheetWeeks, saveGoogleSheetWeek, type GoogleSheetRow } from './googleSheets';
 import { buildHeadcountTSV, firstDateInRow, sheetToTSV } from './excel';
+import ScheduleAudit from './ScheduleAudit';
 
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -1204,6 +1205,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 p-6 font-sans">
       <div className="max-w-7xl mx-auto space-y-6">
+        <ScheduleAudit />
         <header className="flex items-center space-x-3 pb-4 border-b border-slate-200">
           <div className="p-2 bg-indigo-600 text-white rounded-lg">
             <ArrowRightLeft size={24} />
