@@ -29,10 +29,75 @@ function headerLabel(value: string, index: number) {
   return clean(value) || `Column ${index + 1}`;
 }
 
+function findGmHeader(rows: string[][]) {
+  for (let i = 0; i < Math.min(rows.length, 80); i++) {
+    const h = rows[i].map((v) => clean(v).toUpperCase().replace(/\s+/g, ' '));
+    const lob = h.findIndex((v) => v === 'LOB');
+    const id = h.findIndex((v) => v === 'ID');
+    const name = h.findIndex((v) => v === 'NAME');
+    const qmetrics = h.findIndex((v) => v.includes('QMETRICS'));
+    const getty = h.findIndex((v) => v.includes('GETTY NAME'));
+    if (lob >= 0 && id >= 0 && (name >= 0 || getty >= 0) && (qmetrics >= 0 || getty >= 0)) {
+      return { rowIndex: i, headers: h, id, name, qmetrics, getty };
+    }
+  }
+  return null;
+}
+
+function extensionFromRow(row: string[], header: NonNullable<ReturnType<typeof findGmHeader>>) {
+  const end = Math.max(header.id, header.name, header.getty, header.qmetrics);
+  const candidates = [header.qmetrics >= 0 ? clean(row[header.qmetrics]) : '', ...row.slice(0, end + 1).map(clean)];
+  for (const value of candidates) {
+    const match = value.match(/\(\s*(\d{3,})\s*\)/);
+    if (match?.[1]) return match[1];
+    if (/^\d{3,}$/.test(value)) return value;
+  }
+  return '';
+}
+
+function employeeNameFromRow(row: string[], header: NonNullable<ReturnType<typeof findGmHeader>>) {
+  const gettyName = header.getty >= 0 ? clean(row[header.getty]) : '';
+  const name = header.name >= 0 ? clean(row[header.name]) : '';
+  const end = Math.max(header.id, header.name, header.getty, header.qmetrics);
+  const fromMetadata = row.slice(0, end + 1).map(clean)
+    .find((v) => /\(\s*\d{3,}\s*\)\s*-\s*/.test(v))
+    ?.replace(/^.*?\(\s*\d{3,}\s*\)\s*-\s*/, '').trim() || '';
+  return gettyName || (name && !/^\(?\s*\d+\s*\)?$/.test(name) ? name : '') || fromMetadata || 'Unknown agent';
+}
+
+function gmScheduleCells(rows: string[][]) {
+  const header = findGmHeader(rows);
+  if (!header) return null;
+  const firstScheduleCol = Math.max(header.id, header.name, header.getty, header.qmetrics) + 1;
+  const available = Math.max(0, ...rows.map((r) => r.length)) - firstScheduleCol;
+  const groupSize = available >= 56 ? 8 : available >= 14 ? 2 : 0;
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const slotNames = groupSize === 8
+    ? ['Shift start', 'Break 1 start', 'Break 1 end', 'Lunch start', 'Lunch end', 'Break 2 start', 'Break 2 end', 'Shift end']
+    : ['Shift start', 'Shift end'];
+  const agents = new Map<string, { name: string; cells: Map<string, string> }>();
+  if (!groupSize) return { groupSize, agents };
+
+  rows.slice(header.rowIndex + 1).forEach((row) => {
+    const ext = extensionFromRow(row, header);
+    if (!ext) return;
+    const name = employeeNameFromRow(row, header);
+    const cells = new Map<string, string>();
+    days.forEach((day, dayIndex) => {
+      slotNames.forEach((slot, slotIndex) => {
+        const col = firstScheduleCol + dayIndex * groupSize + slotIndex;
+        cells.set(day + ' ' + slot, clean(row[col]));
+      });
+    });
+    if (!agents.has(ext)) agents.set(ext, { name, cells });
+  });
+  return { groupSize, agents };
+}
+
 function buildChanges(oldBook: ParsedWorkbook, newBook: ParsedWorkbook): AuditChange[] {
   const changes: AuditChange[] = [];
   const oldSheetByNorm = new Map(Object.keys(oldBook.sheets).map((name) => [norm(name), name]));
-  const matchedNewSheets = new Set<string>();
+  const matchedOldSheets = new Set<string>();
 
   Object.entries(newBook.sheets).forEach(([newSheetName, newRows]) => {
     const oldSheetName = oldSheetByNorm.get(norm(newSheetName));
@@ -40,71 +105,89 @@ function buildChanges(oldBook: ParsedWorkbook, newBook: ParsedWorkbook): AuditCh
       changes.push({ sheet: newSheetName, employee: '—', field: 'Sheet / week', before: 'Not present', after: 'Added in new file', category: 'Week added' });
       return;
     }
-    matchedNewSheets.add(norm(oldSheetName));
+    matchedOldSheets.add(norm(oldSheetName));
     const oldRows = oldBook.sheets[oldSheetName];
-    const oldHeaderIndex = findHeaderIndex(oldRows);
-    const newHeaderIndex = findHeaderIndex(newRows);
-    if (oldHeaderIndex < 0 || newHeaderIndex < 0) {
-      // Fallback: compare whole rows when the workbook does not have a recognizable schedule header.
-      const rowKey = (r: string[]) => norm(clean(r[0])) || r.map(norm).join('|');
-      const oldMap = new Map(oldRows.map((r, i) => [rowKey(r), { r, i }]));
-      newRows.forEach((row, i) => {
-        const key = rowKey(row);
-        const prior = oldMap.get(key);
-        if (!prior && row.some((v) => clean(v))) changes.push({ sheet: newSheetName, employee: clean(row[0]) || `Row ${i + 1}`, field: 'Row', before: 'Not present', after: row.map(clean).filter(Boolean).join(' | '), category: 'Row added' });
-        else if (prior && prior.r.join('|') !== row.join('|')) {
-          const max = Math.max(prior.r.length, row.length);
-          for (let c = 0; c < max; c++) if (clean(prior.r[c]) !== clean(row[c])) changes.push({ sheet: newSheetName, employee: clean(row[0]) || `Row ${i + 1}`, field: `Column ${c + 1}`, before: clean(prior.r[c]) || '(blank)', after: clean(row[c]) || '(blank)', category: 'Schedule value changed' });
+    const oldGm = gmScheduleCells(oldRows);
+    const newGm = gmScheduleCells(newRows);
+
+    if (oldGm && newGm && oldGm.groupSize && newGm.groupSize) {
+      const oldAgents = oldGm.agents;
+      const newAgents = newGm.agents;
+      newAgents.forEach((agent, ext) => {
+        const prior = oldAgents.get(ext);
+        if (!prior) {
+          changes.push({ sheet: newSheetName, employee: agent.name + ' (' + ext + ')', field: 'Roster', before: 'Not present in previous version', after: 'Present in new version', category: 'Agent added' });
+          return;
         }
+        agent.cells.forEach((after, field) => {
+          const before = prior.cells.get(field) ?? '';
+          if (before === after) return;
+          const isPause = /break|lunch/i.test(field);
+          const category = isPause && /^(off|vac|vacation|leave)$/i.test(after) ? 'Break/lunch marked OFF'
+            : isPause ? 'Break/lunch changed'
+            : /shift/i.test(field) ? 'Shift time changed'
+            : 'Schedule value changed';
+          changes.push({ sheet: newSheetName, employee: agent.name + ' (' + ext + ')', field, before: before || '(blank)', after: after || '(blank)', category });
+        });
+      });
+      oldAgents.forEach((agent, ext) => {
+        if (!newAgents.has(ext)) changes.push({ sheet: newSheetName, employee: agent.name + ' (' + ext + ')', field: 'Roster', before: 'Present in previous version', after: 'Not present in new version', category: 'Agent removed' });
       });
       return;
     }
 
+    const oldHeaderIndex = findHeaderIndex(oldRows);
+    const newHeaderIndex = findHeaderIndex(newRows);
+    if (oldHeaderIndex < 0 || newHeaderIndex < 0) {
+      changes.push({ sheet: newSheetName, employee: '—', field: 'Comparison status', before: '—', after: 'Schedule header not recognized', category: 'Could not compare sheet' });
+      return;
+    }
     const oldHeaders = oldRows[oldHeaderIndex].map(headerLabel);
     const newHeaders = newRows[newHeaderIndex].map(headerLabel);
     const oldNameIdx = oldHeaders.findIndex((h) => /^(name|employee name|full name|agent name|employee)$/i.test(clean(h)));
     const newNameIdx = newHeaders.findIndex((h) => /^(name|employee name|full name|agent name|employee)$/i.test(clean(h)));
-    const keyFor = (row: string[], nameIdx: number) => norm(clean(row[nameIdx]));
-    const oldMap = new Map<string, { row: string[]; index: number }>();
-    oldRows.slice(oldHeaderIndex + 1).forEach((row, i) => {
-      const key = keyFor(row, oldNameIdx);
-      if (key) oldMap.set(key, { row, index: i + oldHeaderIndex + 1 });
+    if (oldNameIdx < 0 || newNameIdx < 0) {
+      changes.push({ sheet: newSheetName, employee: '—', field: 'Comparison status', before: '—', after: 'Employee column not recognized', category: 'Could not compare sheet' });
+      return;
+    }
+    const oldMap = new Map<string, { row: string[]; name: string }>();
+    oldRows.slice(oldHeaderIndex + 1).forEach((row) => {
+      const key = norm(clean(row[oldNameIdx]));
+      if (key) oldMap.set(key, { row, name: clean(row[oldNameIdx]) });
     });
     const seen = new Set<string>();
-    newRows.slice(newHeaderIndex + 1).forEach((row, i) => {
-      const employee = clean(row[newNameIdx]);
-      const key = keyFor(row, newNameIdx);
+    const oldCol = new Map(oldHeaders.map((h, idx) => [norm(h), idx]));
+    newRows.slice(newHeaderIndex + 1).forEach((row) => {
+      const employee = clean(row[newNameIdx]), key = norm(employee);
       if (!key) return;
       seen.add(key);
       const prior = oldMap.get(key);
       if (!prior) {
-        changes.push({ sheet: newSheetName, employee, field: 'Roster', before: 'Not present', after: 'Added in new version', category: 'Agent added' });
+        changes.push({ sheet: newSheetName, employee, field: 'Roster', before: 'Not present in previous version', after: 'Present in new version', category: 'Agent added' });
         return;
       }
-      const oldCol = new Map(oldHeaders.map((h, idx) => [norm(h), idx]));
       newHeaders.forEach((header, colIdx) => {
         const oldIdx = oldCol.get(norm(header));
-        if (oldIdx === undefined) return;
-        const before = clean(prior.row[oldIdx]);
-        const after = clean(row[colIdx]);
+        if (oldIdx === undefined || colIdx === newNameIdx || oldIdx === oldNameIdx) return;
+        const before = clean(prior.row[oldIdx]), after = clean(row[colIdx]);
         if (before === after) return;
-        const label = clean(header);
+        const label = clean(header), isPause = /break|lunch/i.test(label);
         const category = isLeave(after) && !isLeave(before) ? 'Leave added/changed'
           : isOff(before) !== isOff(after) ? 'Day off changed'
-          : /break|lunch/i.test(label) && /off/i.test(after) ? 'Break/lunch marked OFF'
-          : /break|lunch/i.test(label) ? 'Break/lunch changed'
+          : isPause && /off/i.test(after) ? 'Break/lunch marked OFF'
+          : isPause ? 'Break/lunch changed'
           : /in|out|shift|schedule|time/i.test(label) ? 'Shift time changed'
           : 'Schedule value changed';
         changes.push({ sheet: newSheetName, employee, field: label, before: before || '(blank)', after: after || '(blank)', category });
       });
     });
-    oldMap.forEach(({ row }, key) => {
-      if (!seen.has(key)) changes.push({ sheet: newSheetName, employee: clean(row[oldNameIdx]), field: 'Roster', before: 'Present in previous version', after: 'Not present in new version', category: 'Agent removed' });
+    oldMap.forEach((agent, key) => {
+      if (!seen.has(key)) changes.push({ sheet: newSheetName, employee: agent.name, field: 'Roster', before: 'Present in previous version', after: 'Not present in new version', category: 'Agent removed' });
     });
   });
 
   Object.keys(oldBook.sheets).forEach((oldSheetName) => {
-    if (!matchedNewSheets.has(norm(oldSheetName)) && !Object.keys(newBook.sheets).some((name) => norm(name) === norm(oldSheetName))) {
+    if (!matchedOldSheets.has(norm(oldSheetName))) {
       changes.push({ sheet: oldSheetName, employee: '—', field: 'Sheet / week', before: 'Present in previous file', after: 'Not present in new file', category: 'Week removed' });
     }
   });
