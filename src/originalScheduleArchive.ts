@@ -46,7 +46,10 @@ export async function archiveOriginalSchedule(file: File, weekStartDate: string)
 /** Returns the most recent original workbook, never a transformed Google Sheets export. */
 export async function markOriginalScheduleCommitted(path: string) {
   const fileRef = storageRef(storage, path);
-  await updateMetadata(fileRef, { customMetadata: { archiveStatus: 'committed' } });
+  const current = await getMetadata(fileRef);
+  await updateMetadata(fileRef, {
+    customMetadata: { ...(current.customMetadata || {}), archiveStatus: 'committed' },
+  });
 }
 
 export async function getLatestOriginalSchedule(weekStartDate: string) {
