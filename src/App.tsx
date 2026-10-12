@@ -653,8 +653,15 @@ export default function App() {
 
   const handleGenerate = () => {
     try {
+      // Reused weeks from Google Sheets are already transformed output.
+      // Do not try to parse them again as a raw GM-GT schedule.
+      if (!scheduleDataStr && outputData.length > 0) {
+        setIntegrationStatus('La semana reutilizada ya está transformada. Puedes revisar el resultado o guardarlo en Google Sheets.');
+        return;
+      }
+
       if (!scheduleDataStr) {
-        alert('Pega los horarios en la Caja 1.');
+        alert('Selecciona una semana guardada y pulsa "Reutilizar semana", o carga un Excel nuevo.');
         return;
       }
 
