@@ -505,9 +505,9 @@ export default function App() {
       const changed: string[] = [];
       let changedCells = 0;
       for (const currentSheetName of sourceWeekSheets) {
-        const oldPrefix = (/^\\s*(Voice|Chat)\\b/i.exec(currentSheetName)?.[1] || '').toLowerCase();
+        const oldPrefix = (/^\s*(Voice|Chat)\b/i.exec(currentSheetName)?.[1] || '').toLowerCase();
         const oldSheetName = oldWeekSheets.find((name) =>
-          (/^\\s*(Voice|Chat)\\b/i.exec(name)?.[1] || '').toLowerCase() === oldPrefix
+          (/^\s*(Voice|Chat)\b/i.exec(name)?.[1] || '').toLowerCase() === oldPrefix
         ) || oldWeekSheets[0];
         const oldRows = XLSX.utils.sheet_to_json<any[]>(oldWorkbook.Sheets[oldSheetName], { header: 1, raw: false, defval: '' });
         const newRows = XLSX.utils.sheet_to_json<any[]>(wb.Sheets[currentSheetName], { header: 1, raw: false, defval: '' });
