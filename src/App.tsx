@@ -3,6 +3,7 @@ import { ArrowRightLeft, ClipboardCopy, Download, FileSpreadsheet, Upload } from
 import * as XLSX from 'xlsx';
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 import { storage } from './firebase';
+import { archiveOriginalSchedule, getLatestOriginalSchedule, markOriginalScheduleCommitted } from './originalScheduleArchive';
 import { fetchGoogleSheetData, listGoogleSheetWeeks, saveGoogleSheetWeek, type GoogleSheetRow } from './googleSheets';
 import { buildHeadcountTSV, firstDateInRow, sheetToTSV } from './excel';
 import ScheduleAudit from './ScheduleAudit';
@@ -454,8 +455,85 @@ export default function App() {
   const [googleUserTimelineRows, setGoogleUserTimelineRows] = useState<GoogleSheetRow[]>([]);
   const [loadedGmPauseMap, setLoadedGmPauseMap] = useState<Record<string, string>>({});
   const [loadedGmPauseMinutesMap, setLoadedGmPauseMinutesMap] = useState<Record<string, number>>({});
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [reviewRequired, setReviewRequired] = useState(false);
+  const [reviewApproved, setReviewApproved] = useState(false);
+  const [reviewStatus, setReviewStatus] = useState('');
+  const [reviewDiffs, setReviewDiffs] = useState<string[]>([]);
+  const [weekExistsInGoogle, setWeekExistsInGoogle] = useState(false);
 
-  const loadWeek = (wb: XLSX.WorkBook, sheetName: string) => {
+  const prepareOriginalReview = async (wb: XLSX.WorkBook, sheetName: string, weekDate: string, file: File | null) => {
+    setReviewRequired(true);
+    setReviewApproved(false);
+    setReviewStatus('Verificando si la semana ya existe en Google Sheets...');
+    setReviewDiffs([]);
+    if (!weekDate || !file) {
+      setReviewRequired(false);
+      setReviewStatus('');
+      return;
+    }
+
+    try {
+      const weekName = formatDate(new Date(weekDate + 'T00:00:00'));
+      const weeks = await listGoogleSheetWeeks();
+      const exists = weeks.some((week) => String(week).trim().toLowerCase() === weekName.toLowerCase());
+      setWeekExistsInGoogle(exists);
+      if (!exists) {
+        setReviewRequired(false);
+        setReviewStatus('Semana nueva: no hay una versión publicada que comparar. El Excel original se archivará al guardar el nuevo Monitoring.');
+        return;
+      }
+
+      setReviewRequired(true);
+      setReviewStatus('Semana existente en Google Sheets. Buscando el Excel original anterior en Firebase...');
+      const previous = await getLatestOriginalSchedule(weekDate);
+      if (!previous) {
+        setReviewStatus('SEMANA EXISTENTE, SIN ARCHIVO ORIGINAL ANTERIOR. No se puede calcular una comparación histórica. Confirma que revisaste esta limitación antes de transformar.');
+        return;
+      }
+
+      const oldWorkbook = XLSX.read(previous.bytes, { type: 'array', cellNF: true });
+      const normalizedSuffix = (name: string) => name.replace(/^\s*(Voice|Chat)\b/i, '').replace(/\s+/g, '').replace(/[–—]/g, '-').toLowerCase();
+      const sourceWeekSheets = wb.SheetNames.filter((name) => normalizedSuffix(name) === normalizedSuffix(sheetName));
+      const oldWeekSheets = oldWorkbook.SheetNames.filter((name) => normalizedSuffix(name) === normalizedSuffix(sheetName));
+      if (!sourceWeekSheets.length || !oldWeekSheets.length) {
+        setReviewStatus(`Se encontró el Excel anterior (${previous.originalFileName}), pero no una hoja equivalente a “${sheetName}”. La comparación automática no está disponible; revisa el archivo base y confirma para continuar.`);
+        setReviewDiffs([`Archivo anterior: ${previous.originalFileName}`, `Hoja nueva: ${sheetName}`, `Hojas anteriores: ${oldWorkbook.SheetNames.join(', ')}`]);
+        return;
+      }
+
+      const changed: string[] = [];
+      let changedCells = 0;
+      for (const currentSheetName of sourceWeekSheets) {
+        const oldPrefix = (/^\s*(Voice|Chat)\b/i.exec(currentSheetName)?.[1] || '').toLowerCase();
+        const oldSheetName = oldWeekSheets.find((name) =>
+          (/^\s*(Voice|Chat)\b/i.exec(name)?.[1] || '').toLowerCase() === oldPrefix
+        ) || oldWeekSheets[0];
+        const oldRows = XLSX.utils.sheet_to_json<any[]>(oldWorkbook.Sheets[oldSheetName], { header: 1, raw: false, defval: '' });
+        const newRows = XLSX.utils.sheet_to_json<any[]>(wb.Sheets[currentSheetName], { header: 1, raw: false, defval: '' });
+        const maxRows = Math.max(oldRows.length, newRows.length);
+        for (let row = 0; row < maxRows; row++) {
+          const before = oldRows[row] || [];
+          const after = newRows[row] || [];
+          const maxCols = Math.max(before.length, after.length);
+          for (let col = 0; col < maxCols; col++) {
+            const oldValue = String(before[col] ?? '').trim();
+            const newValue = String(after[col] ?? '').trim();
+            if (oldValue === newValue) continue;
+            changedCells++;
+            if (changed.length < 12) changed.push(`${currentSheetName} — fila ${row + 1}, columna ${XLSX.utils.encode_col(col)}: “${oldValue || '(vacío)'}” → “${newValue || '(vacío)'}”`);
+          }
+        }
+      }
+      setReviewDiffs(changed);
+      setReviewStatus(`Comparación de las hojas originales de la semana completada contra ${previous.originalFileName}: ${changedCells} celda(s) diferente(s). Se muestran hasta 12 ejemplos. Revisa antes de aprobar la regeneración.`);
+    } catch (error: any) {
+      setReviewRequired(true);
+      setReviewStatus(`No se pudo validar el historial original: ${error?.message || error}. No se transformará hasta que confirmes la revisión manual.`);
+    }
+  };
+
+  const loadWeek = (wb: XLSX.WorkBook, sheetName: string, fileOverride?: File) => {
     const ws = wb.Sheets[sheetName];
     if (!ws) return;
 
@@ -603,6 +681,8 @@ export default function App() {
 
     setSelectedSheet(sheetName);
     setScheduleDataStr(combinedTsv);
+    const reviewFile = fileOverride || sourceFile;
+    if (selectedDate && reviewFile) void prepareOriginalReview(wb, sheetName, selectedDate, reviewFile);
     setOutputData([]);
 
     if (selectedDate) {
@@ -665,10 +745,11 @@ export default function App() {
         }
       }
 
+      setSourceFile(file);
       setWorkbook(wb);
       setWeekSheets(weeks);
       setFileInfo(info);
-      loadWeek(wb, weeks[weeks.length - 1]);
+      loadWeek(wb, weeks[weeks.length - 1], file);
     } catch (error: any) {
       console.error(error);
       alert(`No pude leer el archivo: ${error.message}`);
@@ -1134,12 +1215,23 @@ export default function App() {
       setIntegrationStatus('Guardando semana en Google Sheets...');
 
       const weekName = formatDate(new Date(weekStartDate + 'T00:00:00'));
+      if (reviewRequired && !reviewApproved) {
+        alert('Revisa las diferencias o confirma la ausencia del Excel original anterior antes de guardar.');
+        return;
+      }
+      if (!sourceFile) {
+        alert('Para archivar el historial, vuelve a seleccionar el Excel original de esta semana antes de guardar.');
+        return;
+      }
+      setIntegrationStatus('Archivando el Excel original como nueva versión en Firebase...');
+      const archivedOriginal = await archiveOriginalSchedule(sourceFile, weekStartDate);
       const versionedRows = outputData.map((row) => ({
         ...row,
         'Version Date': formatDate(parsedVersionDate),
       }));
 
       await saveGoogleSheetWeek(weekName, versionedRows as unknown as GoogleSheetRow[]);
+      await markOriginalScheduleCommitted(archivedOriginal.path);
       setIntegrationStatus('✓ Semana ' + weekName + ' guardada | Version Date: ' + formatDate(parsedVersionDate));
       await handleGoogleWeeks();
     } catch (error: any) {
@@ -1241,7 +1333,24 @@ export default function App() {
               </select>
             </div>
           )}
-          <p className="text-xs text-slate-400">El Excel es opcional: si ya tienes una semana guardada, puedes reutilizarla desde Google Sheets.</p>
+          <p className="text-xs text-slate-400">El Excel original se conserva en Firebase por versiones. Google Sheets se usa para identificar semanas publicadas, no como fuente para comparar horarios.</p>
+          {reviewStatus && (
+            <div className={`rounded-lg border p-4 space-y-2 ${weekExistsInGoogle ? 'border-amber-300 bg-amber-50' : 'border-sky-200 bg-sky-50'}`}>
+              <p className="text-sm font-semibold text-slate-800">{weekExistsInGoogle ? 'Revisión de semana existente' : 'Validación de semana'}</p>
+              <p className="text-sm text-slate-700">{reviewStatus}</p>
+              {reviewDiffs.length > 0 && (
+                <ul className="list-disc pl-5 text-xs text-slate-600 space-y-1">
+                  {reviewDiffs.map((diff, index) => <li key={`${index}-${diff}`}>{diff}</li>)}
+                </ul>
+              )}
+              {reviewRequired && (
+                <label className="flex items-start gap-2 text-sm text-slate-700 pt-2">
+                  <input type="checkbox" checked={reviewApproved} onChange={(event) => setReviewApproved(event.target.checked)} className="mt-1" />
+                  <span>Confirmo que revisé la comparación disponible o que entiendo que no existe un Excel original anterior para comparar. Puedo continuar con la regeneración.</span>
+                </label>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-4">
@@ -1293,7 +1402,13 @@ export default function App() {
               type="date"
               className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
               value={weekStartDate}
-              onChange={(e) => setWeekStartDate(e.target.value)}
+              onChange={(e) => {
+                const nextDate = e.target.value;
+                setWeekStartDate(nextDate);
+                if (workbook && selectedSheet && sourceFile && nextDate) {
+                  void prepareOriginalReview(workbook, selectedSheet, nextDate, sourceFile);
+                }
+              }}
             />
           </div>
           <div className="flex flex-col space-y-1">
@@ -1325,7 +1440,8 @@ export default function App() {
           </div>
           <button
             onClick={handleGenerate}
-            className="ml-auto px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg"
+            disabled={(reviewRequired && !reviewApproved) || reviewStatus.startsWith('Verificando')}
+            className="ml-auto px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium rounded-lg"
           >
             <ArrowRightLeft size={18} className="inline mr-2" />
             Transform Data
