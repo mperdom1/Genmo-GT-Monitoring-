@@ -262,7 +262,8 @@ function normalizeStatus(value: string) {
 function getStatusLabels(statusRaw: string) {
   const key = normalizeStatus(statusRaw);
 
-  if (key === 'EML' || /\bMED(?:ICAL)?\b/.test(key)) {
+  // IGSS (Instituto Guatemalteco de Seguridad Social) is classified as Extended Medical Leave.
+  if (key === 'IGSS' || key === 'EML' || /\bMED(?:ICAL)?\b/.test(key)) {
     return { remark: 'Leave', scheduleType: 'Extended Medical Leave', isOff: true };
   }
 
