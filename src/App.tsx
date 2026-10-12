@@ -575,6 +575,18 @@ export default function App() {
           });
         }
       }
+
+      // If the matching Voice/Chat companion sheet is missing or cannot be paired,
+      // still normalize the selected GM-GT sheet so Transform Data receives NAME,
+      // EXTENSION and Mon-Sun IN/OUT columns instead of the raw workbook layout.
+      if (combinedTsv === tsv) {
+        const normalizedSingle = normalizeGMInput(rows, selectedDate || '');
+        if (normalizedSingle) {
+          combinedTsv = normalizedSingle.rows.map((row) => row.join('\t')).join('\n');
+          setLoadedGmPauseMap(normalizedSingle.pausesByIdDay);
+          setLoadedGmPauseMinutesMap(normalizedSingle.pauseMinutesByIdDay);
+        }
+      }
     }
 
     setSelectedSheet(sheetName);
