@@ -337,8 +337,11 @@ function buildGoogleHeadcountTSV(rows: GoogleSheetRow[], weekDate: string) {
 
 function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
   const gmHeaderIdx = scheduleData.findIndex((row) => {
-    const upper = row.map((cell) => String(cell || '').toUpperCase().trim());
-    return upper.includes('LOB') && upper.includes('GETTY NAME') && upper.includes('ID');
+    const upper = row.map((cell) => String(cell || '').toUpperCase().replace(/\s+/g, ' ').trim());
+    const hasLob = upper.some((cell) => cell === 'LOB' || cell.includes('LOB'));
+    const hasGettyName = upper.some((cell) => cell.includes('GETTY NAME'));
+    const hasId = upper.some((cell) => cell === 'ID' || cell.endsWith(' ID'));
+    return hasLob && hasGettyName && hasId;
   });
   if (gmHeaderIdx === -1) return null;
 
@@ -473,8 +476,10 @@ export default function App() {
     }
 
     const isGM = rows.some((row) => {
-      const upper = row.map((cell) => String(cell || '').toUpperCase().trim());
-      return upper.includes('LOB') && upper.includes('GETTY NAME') && upper.includes('ID');
+      const upper = row.map((cell) => String(cell || '').toUpperCase().replace(/\s+/g, ' ').trim());
+      return upper.some((cell) => cell === 'LOB' || cell.includes('LOB')) &&
+        upper.some((cell) => cell.includes('GETTY NAME')) &&
+        upper.some((cell) => cell === 'ID' || cell.endsWith(' ID'));
     });
 
     let combinedTsv = tsv;
