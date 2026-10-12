@@ -489,34 +489,39 @@ export default function App() {
 
       const oldWorkbook = XLSX.read(previous.bytes, { type: 'array', cellNF: true });
       const normalizedSuffix = (name: string) => name.replace(/^\s*(Voice|Chat)\b/i, '').replace(/\s+/g, '').replace(/[–—]/g, '-').toLowerCase();
-      const oldSheetName = oldWorkbook.SheetNames.includes(sheetName)
-        ? sheetName
-        : oldWorkbook.SheetNames.find((name) => normalizedSuffix(name) === normalizedSuffix(sheetName));
-      if (!oldSheetName) {
+      const sourceWeekSheets = wb.SheetNames.filter((name) => normalizedSuffix(name) === normalizedSuffix(sheetName));
+      const oldWeekSheets = oldWorkbook.SheetNames.filter((name) => normalizedSuffix(name) === normalizedSuffix(sheetName));
+      if (!sourceWeekSheets.length || !oldWeekSheets.length) {
         setReviewStatus(`Se encontró el Excel anterior (${previous.originalFileName}), pero no una hoja equivalente a “${sheetName}”. La comparación automática no está disponible; revisa el archivo base y confirma para continuar.`);
         setReviewDiffs([`Archivo anterior: ${previous.originalFileName}`, `Hoja nueva: ${sheetName}`, `Hojas anteriores: ${oldWorkbook.SheetNames.join(', ')}`]);
         return;
       }
 
-      const oldRows = XLSX.utils.sheet_to_json<any[]>(oldWorkbook.Sheets[oldSheetName], { header: 1, raw: false, defval: '' });
-      const newRows = XLSX.utils.sheet_to_json<any[]>(wb.Sheets[sheetName], { header: 1, raw: false, defval: '' });
       const changed: string[] = [];
       let changedCells = 0;
-      const maxRows = Math.max(oldRows.length, newRows.length);
-      for (let row = 0; row < maxRows; row++) {
-        const before = oldRows[row] || [];
-        const after = newRows[row] || [];
-        const maxCols = Math.max(before.length, after.length);
-        for (let col = 0; col < maxCols; col++) {
-          const oldValue = String(before[col] ?? '').trim();
-          const newValue = String(after[col] ?? '').trim();
-          if (oldValue === newValue) continue;
-          changedCells++;
-          if (changed.length < 12) changed.push(`Fila ${row + 1}, columna ${XLSX.utils.encode_col(col)}: “${oldValue || '(vacío)'}” → “${newValue || '(vacío)'}”`);
+      for (const currentSheetName of sourceWeekSheets) {
+        const oldPrefix = (/^\\s*(Voice|Chat)\\b/i.exec(currentSheetName)?.[1] || '').toLowerCase();
+        const oldSheetName = oldWeekSheets.find((name) =>
+          (/^\\s*(Voice|Chat)\\b/i.exec(name)?.[1] || '').toLowerCase() === oldPrefix
+        ) || oldWeekSheets[0];
+        const oldRows = XLSX.utils.sheet_to_json<any[]>(oldWorkbook.Sheets[oldSheetName], { header: 1, raw: false, defval: '' });
+        const newRows = XLSX.utils.sheet_to_json<any[]>(wb.Sheets[currentSheetName], { header: 1, raw: false, defval: '' });
+        const maxRows = Math.max(oldRows.length, newRows.length);
+        for (let row = 0; row < maxRows; row++) {
+          const before = oldRows[row] || [];
+          const after = newRows[row] || [];
+          const maxCols = Math.max(before.length, after.length);
+          for (let col = 0; col < maxCols; col++) {
+            const oldValue = String(before[col] ?? '').trim();
+            const newValue = String(after[col] ?? '').trim();
+            if (oldValue === newValue) continue;
+            changedCells++;
+            if (changed.length < 12) changed.push(`${currentSheetName} — fila ${row + 1}, columna ${XLSX.utils.encode_col(col)}: “${oldValue || '(vacío)'}” → “${newValue || '(vacío)'}”`);
+          }
         }
       }
       setReviewDiffs(changed);
-      setReviewStatus(`Comparación del Excel original completada contra ${previous.originalFileName}: ${changedCells} celda(s) diferente(s). Revisa los ejemplos antes de aprobar la regeneración.`);
+      setReviewStatus(`Comparación de las hojas originales de la semana completada contra ${previous.originalFileName}: ${changedCells} celda(s) diferente(s). Se muestran hasta 12 ejemplos. Revisa antes de aprobar la regeneración.`);
     } catch (error: any) {
       setReviewRequired(true);
       setReviewStatus(`No se pudo validar el historial original: ${error?.message || error}. No se transformará hasta que confirmes la revisión manual.`);
@@ -1391,7 +1396,13 @@ export default function App() {
               type="date"
               className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
               value={weekStartDate}
-              onChange={(e) => setWeekStartDate(e.target.value)}
+              onChange={(e) => {
+                const nextDate = e.target.value;
+                setWeekStartDate(nextDate);
+                if (workbook && selectedSheet && sourceFile && nextDate) {
+                  void prepareOriginalReview(workbook, selectedSheet, nextDate, sourceFile);
+                }
+              }}
             />
           </div>
           <div className="flex flex-col space-y-1">
