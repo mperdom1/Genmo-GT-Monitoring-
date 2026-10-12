@@ -463,11 +463,15 @@ export default function App() {
   const [weekExistsInGoogle, setWeekExistsInGoogle] = useState(false);
 
   const prepareOriginalReview = async (wb: XLSX.WorkBook, sheetName: string, weekDate: string, file: File | null) => {
-    setReviewRequired(false);
+    setReviewRequired(true);
     setReviewApproved(false);
-    setReviewStatus('');
+    setReviewStatus('Verificando si la semana ya existe en Google Sheets...');
     setReviewDiffs([]);
-    if (!weekDate || !file) return;
+    if (!weekDate || !file) {
+      setReviewRequired(false);
+      setReviewStatus('');
+      return;
+    }
 
     try {
       const weekName = formatDate(new Date(weekDate + 'T00:00:00'));
@@ -475,6 +479,7 @@ export default function App() {
       const exists = weeks.some((week) => String(week).trim().toLowerCase() === weekName.toLowerCase());
       setWeekExistsInGoogle(exists);
       if (!exists) {
+        setReviewRequired(false);
         setReviewStatus('Semana nueva: no hay una versión publicada que comparar. El Excel original se archivará al guardar el nuevo Monitoring.');
         return;
       }
@@ -1434,7 +1439,7 @@ export default function App() {
           </div>
           <button
             onClick={handleGenerate}
-            disabled={reviewRequired && !reviewApproved}
+            disabled={(reviewRequired && !reviewApproved) || reviewStatus.startsWith('Verificando')}
             className="ml-auto px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium rounded-lg"
           >
             <ArrowRightLeft size={18} className="inline mr-2" />
