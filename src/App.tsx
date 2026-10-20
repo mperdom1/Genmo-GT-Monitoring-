@@ -400,7 +400,12 @@ function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
       .filter((item) => item.value === day.toUpperCase())
       .map((item) => item.index)
   );
-  const hasTwoColumnsPerDay = dayColumnIndexes.every((indexes) => indexes.length >= 2);
+  // A raw GM-GT day may repeat its label across 8 columns:
+  // Shift Start, Break 1 start/end, Lunch start/end, Break 2 start/end, Shift End.
+  // Treat it as a simple IN/OUT layout only when each day appears exactly twice.
+  // Using >= 2 here incorrectly picked Break 1 start as the shift end (e.g. 9:30)
+  // and silently discarded all break/lunch information.
+  const hasTwoColumnsPerDay = dayColumnIndexes.every((indexes) => indexes.length === 2);
   const availableScheduleCols = header.length - firstScheduleCol;
   const groupSize = availableScheduleCols >= days.length * 8 ? 8 : 2;
 
