@@ -400,14 +400,18 @@ function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
       .filter((item) => item.value === day.toUpperCase())
       .map((item) => item.index)
   );
-  // A raw GM-GT day may repeat its label across 8 columns:
-  // Shift Start, Break 1 start/end, Lunch start/end, Break 2 start/end, Shift End.
-  // Treat it as a simple IN/OUT layout only when each day appears exactly twice.
-  // Using >= 2 here incorrectly picked Break 1 start as the shift end (e.g. 9:30)
-  // and silently discarded all break/lunch information.
-  const hasTwoColumnsPerDay = dayColumnIndexes.every((indexes) => indexes.length === 2);
-  const availableScheduleCols = header.length - firstScheduleCol;
+  // Hidden break/lunch columns can have blank day labels, so count the actual
+  // schedule width before deciding that this is a simple 2-column-per-day sheet.
+  // A full GM-GT day has 8 columns: shift start, break 1 start/end, lunch start/end,
+  // break 2 start/end, shift end. Otherwise the second repeated day label may point
+  // to Break 1 start (e.g. 9:30 AM), causing the erroneous 90-minute shift.
+  const availableScheduleCols = Math.max(
+    header.length,
+    ...scheduleData.slice(gmHeaderIdx + 1).map((row) => row.length)
+  ) - firstScheduleCol;
   const groupSize = availableScheduleCols >= days.length * 8 ? 8 : 2;
+  const hasTwoColumnsPerDay = groupSize === 2 &&
+    dayColumnIndexes.every((indexes) => indexes.length === 2);
 
   if (!hasTwoColumnsPerDay && availableScheduleCols < days.length * groupSize) {
     throw new Error('Detecté el formato GM-GT, pero no encontré las columnas de horario completas de Mon a Sun.');
