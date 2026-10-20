@@ -339,33 +339,49 @@ function buildGoogleHeadcountTSV(rows: GoogleSheetRow[], weekDate: string) {
 }
 
 function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
-  const gmHeaderIdx = scheduleData.findIndex((row) => {
-    const upper = row.map((cell) => String(cell || '').toUpperCase().replace(/\s+/g, ' ').trim());
-    const hasLob = upper.some((cell) => cell === 'LOB');
-    const hasId = upper.some((cell) => cell === 'ID');
+  const clean = (cell: unknown) => String(cell ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  const upperRow = (row: string[]) => row.map((cell) => clean(cell).toUpperCase());
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const dayNames = new Set(days.map((day) => day.toUpperCase()));
+
+  // Detectar el encabezado por sus campos de identidad, sin depender de que
+  // Qmetrics esté presente o de que los días estén en la misma fila.
+  const gmHeaderIdx = scheduleData.findIndex((row, index) => {
+    const upper = upperRow(row);
+    const hasLob = upper.includes('LOB');
+    const hasId = upper.includes('ID');
     const hasName = upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME');
     const hasQmetrics = upper.some((cell) => cell.includes('QMETRICS'));
-    return hasLob && hasId && hasName && (hasQmetrics || upper.some((cell) => cell.includes('GETTY NAME')));
+    const hasDays = upper.some((cell) => dayNames.has(cell));
+    const hasShiftLabels = index > 0 && upperRow(scheduleData[index - 1] || [])
+      .some((cell) => cell.includes('SHIFT START') || cell.includes('SHIFT END'));
+    return hasLob && hasId && hasName && (hasQmetrics || hasDays || hasShiftLabels);
   });
   if (gmHeaderIdx === -1) return null;
 
-  const header = scheduleData[gmHeaderIdx].map((cell) => String(cell || '').trim());
-  const lobIdx = header.findIndex((h) => h.toUpperCase() === 'LOB');
-  const idIdx = header.findIndex((h) => h.toUpperCase() === 'ID');
-  const nameIdx = header.findIndex((h) => ['NAME', 'GETTY NAME'].includes(h.toUpperCase()));
-  const qmetricsIdx = header.findIndex((h) => h.toUpperCase().includes('QMETRICS'));
+  const header = scheduleData[gmHeaderIdx].map(clean);
+  const upper = header.map((cell) => cell.toUpperCase());
+  const lobIdx = upper.findIndex((h) => h === 'LOB');
+  const idIdx = upper.findIndex((h) => h === 'ID');
+  const nameIdx = upper.findIndex((h) => h === 'NAME' || h === 'GETTY NAME');
+  const qmetricsIdx = upper.findIndex((h) => h.includes('QMETRICS'));
   const metadataEndIdx = Math.max(lobIdx, idIdx, nameIdx, qmetricsIdx);
   const firstScheduleCol = metadataEndIdx + 1;
-  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-  // GM-GT puede venir en dos formatos:
-  // Voice: 8 campos por día (shift + breaks + lunch + shift end).
-  // Chat: 2 campos por día (shift start + shift end).
+  // Si la fila de encabezado contiene Mon, Mon, Tue, Tue..., usar esas
+  // columnas explícitamente. Esto también admite encabezados Shift Start/End
+  // en la fila superior y evita depender de los nombres MON IN/MON OUT.
+  const dayColumnIndexes = days.map((day) =>
+    upper.map((value, index) => ({ value, index }))
+      .filter((item) => item.value === day.toUpperCase())
+      .map((item) => item.index)
+  );
+  const hasTwoColumnsPerDay = dayColumnIndexes.every((indexes) => indexes.length >= 2);
   const availableScheduleCols = header.length - firstScheduleCol;
   const groupSize = availableScheduleCols >= days.length * 8 ? 8 : 2;
 
-  if (availableScheduleCols < days.length * groupSize) {
-    throw new Error('Detecte el formato GM-GT, pero no encontre los campos completos de Mon a Sun.');
+  if (!hasTwoColumnsPerDay && availableScheduleCols < days.length * groupSize) {
+    throw new Error('Detecté el formato GM-GT, pero no encontré las columnas de horario completas de Mon a Sun.');
   }
 
   let startDate = weekStartDate || inferWeekStartFromRows(scheduleData.slice(0, gmHeaderIdx));
@@ -406,16 +422,21 @@ function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
 
     const row: string[] = [normalizedName, rawId];
     for (let dayIndex = 0; dayIndex < days.length; dayIndex++) {
-      const base = firstScheduleCol + dayIndex * groupSize;
-      const shiftIn = String(source[base] || '').trim();
-      const shiftOut = String(source[base + (groupSize === 8 ? 7 : 1)] || '').trim();
+      const base = hasTwoColumnsPerDay
+        ? dayColumnIndexes[dayIndex][0]
+        : firstScheduleCol + dayIndex * groupSize;
+      const outBase = hasTwoColumnsPerDay
+        ? dayColumnIndexes[dayIndex][1]
+        : base + (groupSize === 8 ? 7 : 1);
+      const shiftIn = clean(source[base]);
+      const shiftOut = clean(source[outBase]);
       row.push(shiftIn, shiftOut);
 
-      const pauseParts = groupSize === 8
+      const pauseParts = !hasTwoColumnsPerDay && groupSize === 8
         ? [
-            ['Break 1', String(source[base + 1] || '').trim(), String(source[base + 2] || '').trim()],
-            ['Lunch', String(source[base + 3] || '').trim(), String(source[base + 4] || '').trim()],
-            ['Break 2', String(source[base + 5] || '').trim(), String(source[base + 6] || '').trim()],
+            ['Break 1', clean(source[base + 1]), clean(source[base + 2])],
+            ['Lunch', clean(source[base + 3]), clean(source[base + 4])],
+            ['Break 2', clean(source[base + 5]), clean(source[base + 6])],
           ].filter(([, from, to]) => from || to)
         : [];
 
