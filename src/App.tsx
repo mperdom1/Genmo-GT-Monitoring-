@@ -216,6 +216,20 @@ function toEmployeeName(name: string) {
 function normalizeHeader(header: string) {
   return (header || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
+function normalizeScheduleHeader(cell: unknown) {
+  return String(cell ?? '')
+    .replace(/&nbsp;|&#160;|&#xA0;/gi, ' ')
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, dec) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/\u00a0/g, ' ')
+    .replace(/[\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .trim();
+}
+
 
 
 
@@ -809,7 +823,7 @@ export default function App() {
       let gmPauseMap: Record<string, string> = {};
       let gmPauseMinutesMap: Record<string, number> = {};
       const isAlreadyNormalizedGM = scheduleData.some((row) =>
-        row.some((cell) => canonicalHeader(cell) === 'EXTENSION')
+        row.some((cell) => normalizeScheduleHeader(cell) === 'EXTENSION')
       );
       const gmNormalized = isAlreadyNormalizedGM ? null : normalizeGMInput(scheduleData, weekStartDate);
       const isGmNormalizedSchedule = Boolean(gmNormalized) || isAlreadyNormalizedGM;
@@ -823,17 +837,6 @@ export default function App() {
         if (!weekStartDate && gmNormalized.weekStartDate) setWeekStartDate(gmNormalized.weekStartDate);
       }
 
-      const canonicalHeader = (cell: unknown) => String(cell ?? '')
-        .replace(/&nbsp;|&#160;|&#xA0;/gi, ' ')
-        .replace(/&#x([0-9a-f]+);/gi, (_match, hex) => String.fromCodePoint(parseInt(hex, 16)))
-        .replace(/&#(\d+);/g, (_match, dec) => String.fromCodePoint(parseInt(dec, 10)))
-        .replace(/\u00a0/g, ' ')
-        .replace(/[\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toUpperCase()
-        .replace(/[^A-Z0-9]+/g, ' ')
-        .trim();
       const headerIdx = scheduleData.findIndex((row) => {
         const upper = row.map(canonicalHeader);
         const hasName = upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME');
