@@ -378,7 +378,8 @@ function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
     const hasDays = upper.some((cell) => dayNames.has(cell));
     const hasShiftLabels = index > 0 && upperRow(scheduleData[index - 1] || [])
       .some((cell) => cell.includes('SHIFT START') || cell.includes('SHIFT END'));
-    return hasLob && hasId && hasName && (hasQmetrics || hasDays || hasShiftLabels);
+    // The uploaded GM-GT variant uses LOB, SITE, Name and Qmetrics, without an ID column.
+    return hasLob && hasName && (hasId || hasQmetrics) && (hasQmetrics || hasDays || hasShiftLabels);
   });
   if (gmHeaderIdx === -1) return null;
 
@@ -862,8 +863,9 @@ export default function App() {
 
         // GM-GT has a two-row header: LOB/SITE/Name/Qmetrics, then Mon/Mon/Tue/Tue...
         // with Shift Start/Shift End labels in the row above the day names.
-        const hasIdentityColumns = upper.includes('LOB') && upper.includes('ID') &&
-          upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME');
+        const hasIdentityColumns = upper.includes('LOB') &&
+          upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME') &&
+          (upper.includes('ID') || upper.some((cell) => cell.includes('QMETRICS')));
         const hasGmDayRow = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'].every((day) =>
           upper.filter((cell) => cell === day).length >= 2
         );
