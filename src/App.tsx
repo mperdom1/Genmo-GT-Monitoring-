@@ -339,7 +339,16 @@ function buildGoogleHeadcountTSV(rows: GoogleSheetRow[], weekDate: string) {
 }
 
 function normalizeGMInput(scheduleData: string[][], weekStartDate: string) {
-  const clean = (cell: unknown) => String(cell ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  const clean = (cell: unknown) => String(cell ?? '')
+    // Excel exports can preserve HTML entities as literal text inside header cells.
+    .replace(/&nbsp;|&#160;|&#xA0;/gi, ' ')
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, dec) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&amp;/gi, '&')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   const upperRow = (row: string[]) => row.map((cell) => clean(cell).toUpperCase());
   const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const dayNames = new Set(days.map((day) => day.toUpperCase()));
@@ -800,7 +809,7 @@ export default function App() {
       let gmPauseMap: Record<string, string> = {};
       let gmPauseMinutesMap: Record<string, number> = {};
       const isAlreadyNormalizedGM = scheduleData.some((row) =>
-        row.some((cell) => String(cell || '').toUpperCase().trim() === 'EXTENSION')
+        row.some((cell) => canonicalHeader(cell) === 'EXTENSION')
       );
       const gmNormalized = isAlreadyNormalizedGM ? null : normalizeGMInput(scheduleData, weekStartDate);
       const isGmNormalizedSchedule = Boolean(gmNormalized) || isAlreadyNormalizedGM;
@@ -814,9 +823,24 @@ export default function App() {
         if (!weekStartDate && gmNormalized.weekStartDate) setWeekStartDate(gmNormalized.weekStartDate);
       }
 
+      const canonicalHeader = (cell: unknown) => String(cell ?? '')
+        .replace(/&nbsp;|&#160;|&#xA0;/gi, ' ')
+        .replace(/&#x([0-9a-f]+);/gi, (_match, hex) => String.fromCodePoint(parseInt(hex, 16)))
+        .replace(/&#(\d+);/g, (_match, dec) => String.fromCodePoint(parseInt(dec, 10)))
+        .replace(/\u00a0/g, ' ')
+        .replace(/[\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, ' ')
+        .trim();
       const headerIdx = scheduleData.findIndex((row) => {
-        const upper = row.map((cell) => String(cell || '').toUpperCase().trim());
-        return upper.includes('NAME') && upper.some((c) => c.includes('MON IN'));
+        const upper = row.map(canonicalHeader);
+        const hasName = upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME');
+        const hasMondayIn = upper.some((cell) => /^MON\s*IN$/.test(cell));
+        // Also accept alternate Getty labels such as "Mon Shift Start".
+        const hasMondayShiftStart = upper.some((cell) => /^MON\s+(IN|SHIFT START)$/.test(cell));
+        return hasName && (hasMondayIn || hasMondayShiftStart);
       });
 
       if (headerIdx === -1) {
@@ -824,15 +848,16 @@ export default function App() {
         return;
       }
 
-      const headers = scheduleData[headerIdx].map((h) => String(h || '').toUpperCase().trim());
+      const headers = scheduleData[headerIdx].map(canonicalHeader).map((h) => h.replace(/\s+/g, ' ').trim());
       const nameIdx = headers.findIndex((h) => h === 'NAME');
       const attendanceIdIdx = headers.findIndex((h) => h.includes('ATTENDANCE'));
       const extensionIdx = headers.findIndex((h) => h === 'EXTENSION');
 
       const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       const dayCols = days.map((day) => {
-        const inIdx = headers.findIndex((h) => h === `${day.toUpperCase()} IN`);
-        const outIdx = headers.findIndex((h) => h === `${day.toUpperCase()} OUT`);
+        const prefix = day.toUpperCase();
+        const inIdx = headers.findIndex((h) => h === `${prefix} IN` || h === `${prefix} SHIFT START`);
+        const outIdx = headers.findIndex((h) => h === `${prefix} OUT` || h === `${prefix} SHIFT END`);
         return { day, inIdx, outIdx };
       });
 
