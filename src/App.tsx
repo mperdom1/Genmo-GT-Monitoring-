@@ -854,13 +854,25 @@ export default function App() {
         if (!weekStartDate && gmNormalized.weekStartDate) setWeekStartDate(gmNormalized.weekStartDate);
       }
 
-      const headerIdx = scheduleData.findIndex((row) => {
+      const headerIdx = scheduleData.findIndex((row, index) => {
         const upper = row.map(normalizeScheduleHeader);
         const hasName = upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME');
         const hasMondayIn = upper.some((cell) => /^MON\s*IN$/.test(cell));
-        // Also accept alternate Getty labels such as "Mon Shift Start".
         const hasMondayShiftStart = upper.some((cell) => /^MON\s+(IN|SHIFT START)$/.test(cell));
-        return hasName && (hasMondayIn || hasMondayShiftStart);
+
+        // GM-GT has a two-row header: LOB/SITE/Name/Qmetrics, then Mon/Mon/Tue/Tue...
+        // with Shift Start/Shift End labels in the row above the day names.
+        const hasIdentityColumns = upper.includes('LOB') && upper.includes('ID') &&
+          upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME');
+        const hasGmDayRow = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'].every((day) =>
+          upper.filter((cell) => cell === day).length >= 2
+        );
+        const previous = index > 0 ? scheduleData[index - 1].map(normalizeScheduleHeader) : [];
+        const hasShiftLabelsAbove = previous.filter((cell) => cell === 'SHIFT START').length >= 7 &&
+          previous.filter((cell) => cell === 'SHIFT END').length >= 7;
+
+        return (hasName && (hasMondayIn || hasMondayShiftStart)) ||
+          (hasIdentityColumns && hasGmDayRow && hasShiftLabelsAbove);
       });
 
       if (headerIdx === -1) {
