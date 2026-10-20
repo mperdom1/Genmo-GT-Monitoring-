@@ -830,9 +830,18 @@ export default function App() {
 
       let gmPauseMap: Record<string, string> = {};
       let gmPauseMinutesMap: Record<string, number> = {};
-      const isAlreadyNormalizedGM = scheduleData.some((row) =>
-        row.some((cell) => normalizeScheduleHeader(cell) === 'EXTENSION')
-      );
+      // Do not classify a raw GM-GT sheet as already normalized just because it
+      // contains an "Extension" metadata column. The transformed layout must have
+      // Name + Extension and a complete Mon-Sun IN/OUT header on the same row.
+      const isAlreadyNormalizedGM = scheduleData.some((row) => {
+        const headers = row.map(normalizeScheduleHeader);
+        const hasName = headers.some((cell) => cell === 'NAME' || cell === 'GETTY NAME');
+        const hasExtension = headers.includes('EXTENSION');
+        const hasAllDays = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'].every((day) =>
+          headers.includes(`${day} IN`) && headers.includes(`${day} OUT`)
+        );
+        return hasName && hasExtension && hasAllDays;
+      });
       const gmNormalized = isAlreadyNormalizedGM ? null : normalizeGMInput(scheduleData, weekStartDate);
       const isGmNormalizedSchedule = Boolean(gmNormalized) || isAlreadyNormalizedGM;
       if (isAlreadyNormalizedGM) {
