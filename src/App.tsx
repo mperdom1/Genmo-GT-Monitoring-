@@ -603,12 +603,20 @@ export default function App() {
         inferWeekStartFromRows(rows.slice(0, 5));
     }
 
-    const isGM = rows.some((row) => {
-      const upper = row.map((cell) => String(cell || '').toUpperCase().replace(/\s+/g, ' ').trim());
-      return upper.some((cell) => cell === 'LOB') &&
-        upper.some((cell) => cell === 'ID') &&
-        upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME') &&
-        (upper.some((cell) => cell.includes('QMETRICS')) || upper.some((cell) => cell.includes('GETTY NAME')));
+    const gmDays = new Set(['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']);
+    const isGM = rows.some((row, index) => {
+      const upper = row.map(normalizeScheduleHeader);
+      const hasIdentity = upper.includes('LOB') && upper.includes('ID') &&
+        upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME');
+      const hasQmetrics = upper.some((cell) => cell.includes('QMETRICS'));
+      const hasDayLabels = upper.some((cell) => gmDays.has(cell));
+      const hasShiftLabels = upper.some((cell) => cell.includes('SHIFT START') || cell.includes('SHIFT END'));
+      const previous = (rows[index - 1] || []).map(normalizeScheduleHeader);
+      const next = (rows[index + 1] || []).map(normalizeScheduleHeader);
+      const nearbyShiftLabels = [...previous, ...next].some((cell) =>
+        cell.includes('SHIFT START') || cell.includes('SHIFT END')
+      );
+      return hasIdentity && (hasQmetrics || hasDayLabels || hasShiftLabels || nearbyShiftLabels);
     });
 
     let combinedTsv = tsv;
