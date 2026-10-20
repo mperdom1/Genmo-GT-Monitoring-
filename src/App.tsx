@@ -846,7 +846,7 @@ export default function App() {
       }
 
       const headerIdx = scheduleData.findIndex((row) => {
-        const upper = row.map(canonicalHeader);
+        const upper = row.map(normalizeScheduleHeader);
         const hasName = upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME');
         const hasMondayIn = upper.some((cell) => /^MON\s*IN$/.test(cell));
         // Also accept alternate Getty labels such as "Mon Shift Start".
@@ -859,7 +859,7 @@ export default function App() {
         return;
       }
 
-      const headers = scheduleData[headerIdx].map(canonicalHeader).map((h) => h.replace(/\s+/g, ' ').trim());
+      const headers = scheduleData[headerIdx].map(normalizeScheduleHeader).map((h) => h.replace(/\s+/g, ' ').trim());
       const nameIdx = headers.findIndex((h) => h === 'NAME');
       const attendanceIdIdx = headers.findIndex((h) => h.includes('ATTENDANCE'));
       const extensionIdx = headers.findIndex((h) => h === 'EXTENSION');
