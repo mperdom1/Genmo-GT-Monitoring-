@@ -607,8 +607,9 @@ export default function App() {
     const gmDays = new Set(['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']);
     const isGM = rows.some((row, index) => {
       const upper = row.map(normalizeScheduleHeader);
-      const hasIdentity = upper.includes('LOB') && upper.includes('ID') &&
-        upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME');
+      const hasName = upper.some((cell) => cell === 'NAME' || cell === 'GETTY NAME');
+      const hasSite = upper.includes('SITE');
+      const hasId = upper.includes('ID');
       const hasQmetrics = upper.some((cell) => cell.includes('QMETRICS'));
       const hasDayLabels = upper.some((cell) => gmDays.has(cell));
       const hasShiftLabels = upper.some((cell) => cell.includes('SHIFT START') || cell.includes('SHIFT END'));
@@ -617,6 +618,9 @@ export default function App() {
       const nearbyShiftLabels = [...previous, ...next].some((cell) =>
         cell.includes('SHIFT START') || cell.includes('SHIFT END')
       );
+      // The uploaded GM-GT format has LOB, SITE, Name and Qmetrics; it does not
+      // contain an "ID" column. Detect it here so loadWeek normalizes it on import.
+      const hasIdentity = upper.includes('LOB') && hasName && (hasId || hasSite || hasQmetrics);
       return hasIdentity && (hasQmetrics || hasDayLabels || hasShiftLabels || nearbyShiftLabels);
     });
 
